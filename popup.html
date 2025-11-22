@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gemini Translator</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🌐 Gemini Translator</h1>
+      <p>Dịch sang Tiếng Việt</p>
+    </div>
+
+    <div class="section">
+      <label for="apiKey">Gemini API Key:</label>
+      <input type="password" id="apiKey" placeholder="Nhập API key của bạn">
+      <button id="saveApiKey" class="btn btn-primary">Lưu API Key</button>
+      <p class="help-text">
+        Lấy API key miễn phí tại: 
+        <a href="https://makersuite.google.com/app/apikey" target="_blank">Google AI Studio</a>
+      </p>
+    </div>
+
+    <div class="section">
+      <h3>Cách sử dụng:</h3>
+      <ul class="instructions">
+        <li><strong>Dịch toàn trang:</strong> Click chuột phải → "Dịch trang này sang tiếng Việt"</li>
+        <li><strong>Dịch văn bản:</strong> Chọn text → Click chuột phải → "Dịch văn bản đã chọn"</li>
+        <li><strong>Khôi phục:</strong> Click lại "Dịch trang này" để khôi phục bản gốc</li>
+      </ul>
+    </div>
+
+    <div class="section actions">
+      <button id="translateCurrentPage" class="btn btn-success">Dịch Trang Hiện Tại</button>
+      <button id="restorePage" class="btn btn-secondary">Khôi Phục Gốc</button>
+    </div>
+
+    <div id="status" class="status"></div>
+
+    <div class="footer">
+      <p>Phiên bản 1.0.0</p>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
