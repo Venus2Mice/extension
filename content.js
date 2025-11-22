@@ -139,6 +139,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
   
+  if (request.action === 'clearCache') {
+    translationCache.clear();
+    console.log('[Gemini Translator] In-memory cache cleared');
+    sendResponse({ status: 'ok' });
+    return true;
+  }
+  
   if (request.action === 'translatePage') {
     handleTranslatePage();
     sendResponse({ status: 'started' });
@@ -305,8 +312,26 @@ async function handleTranslatePage() {
             .filter(l => /^\[\d+\]/.test(l));
           
           console.log(`[Gemini Translator] Chunk ${i+1}: got ${allLines.length} raw lines, ${lines.length} valid lines, expected ${chunk.map.length}`);
+          
+          // Log first and last lines to check for missing chunks
+          if (lines.length > 0) {
+            console.log(`[Gemini Translator] Chunk ${i+1} first line: ${lines[0].substring(0, 80)}`);
+            console.log(`[Gemini Translator] Chunk ${i+1} last line: ${lines[lines.length-1].substring(0, 80)}`);
+          }
+          
           if (lines.length < chunk.map.length) {
             console.warn(`[Gemini Translator] Chunk ${i+1}: Missing ${chunk.map.length - lines.length} translations!`);
+            console.warn(`[Gemini Translator] Expected indices: ${chunk.map[0].index} to ${chunk.map[chunk.map.length-1].index}`);
+            
+            // Find which indices are missing
+            const receivedIndices = new Set();
+            lines.forEach(line => {
+              const match = line.match(/^\[(\d+)\]/);
+              if (match) receivedIndices.add(parseInt(match[1]));
+            });
+            const missingIndices = chunk.map.filter(e => !receivedIndices.has(e.index)).map(e => e.index);
+            console.warn(`[Gemini Translator] Missing indices: [${missingIndices.join(', ')}]`);
+            console.warn(`[Gemini Translator] Raw response preview: ${translatedText.substring(0, 300)}`);
           }
           
           let chunkApplied = 0;
@@ -538,6 +563,16 @@ async function handleTranslatePageFull() {
           .filter(l => /^\[\d+\]/.test(l));
         
         console.log(`[Gemini Translator] Full chunk ${i+1}: got ${allLines.length} raw lines, ${lines.length} valid lines, expected ${chunk.map.length}`);
+        
+        // Log first and last for debugging
+        if (lines.length > 0) {
+          console.log(`[Gemini Translator] Full chunk ${i+1} first: ${lines[0].substring(0, 80)}`);
+          console.log(`[Gemini Translator] Full chunk ${i+1} last: ${lines[lines.length-1].substring(0, 80)}`);
+        }
+        if (lines.length < chunk.map.length) {
+          console.warn(`[Gemini Translator] Full chunk ${i+1}: Missing translations!`);
+          console.warn(`[Gemini Translator] Raw response: ${translation.substring(0, 300)}`);
+        }
         
         lines.forEach((line, lineIdx) => {
           const match = line.match(/^\[(\d+)\](.*)$/);

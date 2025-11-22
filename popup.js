@@ -1,6 +1,7 @@
 // Popup JavaScript
 document.addEventListener('DOMContentLoaded', () => {
   loadApiKey();
+  loadCacheInfo();
   
   // Save API Key
   document.getElementById('saveApiKey').addEventListener('click', saveApiKey);
@@ -10,6 +11,9 @@ document.addEventListener('DOMContentLoaded', () => {
   
   // Restore original page
   document.getElementById('restorePage').addEventListener('click', restorePage);
+  
+  // Clear cache
+  document.getElementById('clearCache').addEventListener('click', clearCache);
   
   // Allow Enter key to save API key
   document.getElementById('apiKey').addEventListener('keypress', (e) => {
@@ -150,4 +154,48 @@ function showStatus(message, type = 'info') {
   setTimeout(() => {
     statusDiv.style.display = 'none';
   }, 3000);
+}
+
+// Load cache info
+async function loadCacheInfo() {
+  try {
+    const result = await chrome.storage.local.get(['translationCache', 'cacheTimestamp']);
+    const cacheInfo = document.getElementById('cacheInfo');
+    
+    if (result.translationCache) {
+      const count = Object.keys(result.translationCache).length;
+      const age = result.cacheTimestamp ? Math.round((Date.now() - result.cacheTimestamp) / (24*60*60*1000)) : 0;
+      cacheInfo.textContent = `${count} bản dịch đã cache (${age} ngày)`;
+    } else {
+      cacheInfo.textContent = 'Chưa có cache';
+    }
+  } catch (error) {
+    console.error('Error loading cache info:', error);
+    document.getElementById('cacheInfo').textContent = 'Không thể tải';
+  }
+}
+
+// Clear cache
+async function clearCache() {
+  if (!confirm('Bạn có chắc muốn xóa toàn bộ cache dịch? Việc này sẽ làm chậm lần dịch tiếp theo.')) {
+    return;
+  }
+  
+  try {
+    await chrome.storage.local.remove(['translationCache', 'cacheTimestamp']);
+    showStatus('✓ Đã xóa cache thành công!', 'success');
+    loadCacheInfo();
+    
+    // Also notify content scripts to clear their in-memory cache
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab) {
+      chrome.tabs.sendMessage(tab.id, { action: 'clearCache' }, () => {
+        if (chrome.runtime.lastError) {
+          // Ignore errors if content script not loaded
+        }
+      });
+    }
+  } catch (error) {
+    showStatus('Lỗi khi xóa cache: ' + error.message, 'error');
+  }
 }

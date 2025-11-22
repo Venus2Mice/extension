@@ -181,8 +181,16 @@ async function tryTranslate(text, apiKey, model, textStyle) {
     instruction = textStyle.instruction + '\n';
   }
   
-  const promptText = `${instruction}Translate to Vietnamese. Format: [number]text. NO extra words.
+  const promptText = `${instruction}CRITICAL: Translate ALL lines below to Vietnamese. Do NOT skip ANY line!
 
+Format: Keep [number] exactly as shown, translate text to Vietnamese.
+Example:
+Input: [0]Home [1]About [2]Contact
+Output: [0]Trang chủ [1]Giới thiệu [2]Liên hệ
+
+WARNING: If you skip even ONE line, the translation fails. Process EVERY [number] from first to last.
+
+Text to translate:
 ${text}`;
   
   const requestBody = {
