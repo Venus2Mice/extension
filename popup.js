@@ -21,9 +21,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Load API key from storage
 function loadApiKey() {
-  chrome.storage.sync.get(['geminiApiKey'], (result) => {
+  chrome.storage.sync.get(['geminiApiKey', 'preferredModel'], (result) => {
     if (result.geminiApiKey) {
       document.getElementById('apiKey').value = result.geminiApiKey;
+    }
+    if (result.preferredModel) {
+      document.getElementById('preferredModel').value = result.preferredModel;
     }
   });
 }
@@ -31,14 +34,18 @@ function loadApiKey() {
 // Save API key to storage
 function saveApiKey() {
   const apiKey = document.getElementById('apiKey').value.trim();
+  const preferredModel = document.getElementById('preferredModel').value;
   
   if (!apiKey) {
     showStatus('Vui lòng nhập API key', 'error');
     return;
   }
   
-  chrome.storage.sync.set({ geminiApiKey: apiKey }, () => {
-    showStatus('✓ Đã lưu API key thành công!', 'success');
+  chrome.storage.sync.set({ 
+    geminiApiKey: apiKey,
+    preferredModel: preferredModel 
+  }, () => {
+    showStatus(`✓ Đã lưu! Model ưu tiên: ${preferredModel}`, 'success');
   });
 }
 
@@ -63,11 +70,12 @@ async function translateCurrentPage() {
         // Ensure content script is injected
         await ensureContentScript(tab.id);
         
-        chrome.tabs.sendMessage(tab.id, { action: 'translatePage' }, (response) => {
+        chrome.tabs.sendMessage(tab.id, { action: 'translatePageFull' }, (response) => {
           if (chrome.runtime.lastError) {
             showStatus('Lỗi: ' + chrome.runtime.lastError.message, 'error');
           } else {
-            showStatus('Đang dịch trang...', 'info');
+            showStatus('Đang dịch toàn bộ trang...', 'success');
+            setTimeout(() => window.close(), 1500);
           }
         });
       } catch (error) {

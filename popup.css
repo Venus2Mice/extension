@@ -51,7 +51,8 @@ label {
 }
 
 input[type="password"],
-input[type="text"] {
+input[type="text"],
+select {
   width: 100%;
   padding: 10px;
   border: 2px solid #e0e0e0;
@@ -59,10 +60,12 @@ input[type="text"] {
   font-size: 14px;
   margin-bottom: 10px;
   transition: border-color 0.3s;
+  background: white;
 }
 
 input[type="password"]:focus,
-input[type="text"]:focus {
+input[type="text"]:focus,
+select:focus {
   outline: none;
   border-color: #667eea;
 }

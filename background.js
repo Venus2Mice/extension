@@ -3,8 +3,14 @@ chrome.runtime.onInstalled.addListener(() => {
   // Create context menu
   chrome.contextMenus.create({
     id: 'translatePage',
-    title: 'Dịch trang này sang tiếng Việt',
-    contexts: ['page', 'selection']
+    title: 'Dịch trang này sang tiếng Việt (Lazy)',
+    contexts: ['page']
+  });
+
+  chrome.contextMenus.create({
+    id: 'translatePageFull',
+    title: 'Dịch toàn bộ trang (Full)',
+    contexts: ['page']
   });
 
   chrome.contextMenus.create({
@@ -23,6 +29,14 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     if (info.menuItemId === 'translatePage') {
       chrome.tabs.sendMessage(tab.id, {
         action: 'translatePage'
+      }, (response) => {
+        if (chrome.runtime.lastError) {
+          console.error('Error:', chrome.runtime.lastError.message);
+        }
+      });
+    } else if (info.menuItemId === 'translatePageFull') {
+      chrome.tabs.sendMessage(tab.id, {
+        action: 'translatePageFull'
       }, (response) => {
         if (chrome.runtime.lastError) {
           console.error('Error:', chrome.runtime.lastError.message);
@@ -53,7 +67,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
   
   if (request.action === 'translate') {
-    translateText(request.text, request.apiKey)
+    translateText(request.text, request.apiKey, request.textStyle)
       .then(translation => sendResponse({ success: true, translation }))
       .catch(error => sendResponse({ success: false, error: error.message }));
     return true;
@@ -92,47 +106,89 @@ async function ensureContentScript(tabId) {
 }
 
 // Translate text using Gemini API
-async function translateText(text, apiKey) {
+async function translateText(text, apiKey, textStyle) {
   console.log('[Gemini Translator BG] Translating text:', text.substring(0, 100));
+  console.log('[Gemini Translator BG] Text style:', textStyle ? textStyle.name : 'default');
   
   if (!apiKey) {
     console.error('[Gemini Translator BG] No API key provided');
     throw new Error('API key chưa được cấu hình. Vui lòng thêm Gemini API key trong popup.');
   }
 
-  // Only use models that work with free tier
-  const models = [
-    'gemini-flash-latest',      // faster, free tier available
-    'gemini-1.5-flash-latest',  // backup
-    'gemini-1.5-flash'          // stable fallback
+  // Get preferred model from settings
+  const settings = await chrome.storage.sync.get(['preferredModel']);
+  const preferredModel = settings.preferredModel || 'gemini-2.5-flash-lite';
+
+  // List of Gemini models to try (from fastest/cheapest to most capable)
+  const allModels = [
+    'gemini-2.5-flash-lite',
+    'gemini-2.5-flash',
+    'gemini-flash-latest',
+    'gemini-2.0-flash-lite',
+    'gemini-2.0-flash',
+    'gemini-1.5-flash-latest',
+    'gemini-1.5-flash',
+    'gemini-1.5-pro-latest',
+    'gemini-exp-1206',
+    'gemini-3-pro-preview',
+    'gemini-pro'
   ];
+  
+  // Prioritize preferred model first, then others
+  const models = [preferredModel, ...allModels.filter(m => m !== preferredModel)];
+  
+  console.log('[Gemini Translator BG] Model priority:', models[0], '(preferred)');
   
   let lastError = null;
   
   for (const model of models) {
     try {
       console.log('[Gemini Translator BG] Trying model:', model);
-      const result = await tryTranslate(text, apiKey, model);
-      console.log('[Gemini Translator BG] Success with model:', model);
+      const result = await tryTranslate(text, apiKey, model, textStyle);
+      console.log('[Gemini Translator BG] ✓ Success with model:', model);
+      
+      // Update preferred model if this one succeeded and it's not already preferred
+      if (model !== preferredModel) {
+        console.log('[Gemini Translator BG] Switching preferred model to:', model);
+        chrome.storage.sync.set({ preferredModel: model });
+      }
+      
       return result;
     } catch (error) {
-      console.warn('[Gemini Translator BG] Failed with model:', model, error.message);
+      console.warn('[Gemini Translator BG] ✗ Failed with model:', model, '-', error.message);
       lastError = error;
+      
+      // If it's a quota error (429), wait a bit before trying next model
+      if (error.message.includes('429') || error.message.includes('quota')) {
+        console.log('[Gemini Translator BG] Quota exceeded, switching to next model...');
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
       // Continue to next model
     }
   }
   
   // If all models failed, throw the last error
+  console.error('[Gemini Translator BG] All models failed!');
   throw lastError;
 }
 
-async function tryTranslate(text, apiKey, model) {
+async function tryTranslate(text, apiKey, model, textStyle) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  
+  // Optimized prompt - balance between clarity and token usage
+  let instruction = '';
+  if (textStyle && textStyle.type !== 'general') {
+    instruction = textStyle.instruction + '\n';
+  }
+  
+  const promptText = `${instruction}Translate to Vietnamese. Format: [number]text. NO extra words.
+
+${text}`;
   
   const requestBody = {
     contents: [{
       parts: [{
-        text: `Translate the following text to Vietnamese. Keep the [number] markers intact at the start of each line:\n\n${text}`
+        text: promptText
       }]
     }],
     generationConfig: {
