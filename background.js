@@ -183,7 +183,9 @@ async function translateText(text, apiKey, textStyle) {
     'gemini-flash-latest',
     'gemini-2.0-flash-lite',
     'gemini-2.0-flash',
-    'gemini-exp-1206'
+    'gemini-exp-1206',
+    'gemini-3-pro-preview',
+    'gemini-flash-lite-latest',
   ];
   
   // Prioritize preferred model first, then others
