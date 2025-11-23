@@ -197,7 +197,8 @@ async function handleTranslatePage() {
     const testResponse = await chrome.runtime.sendMessage({
       action: 'translate',
       text: 'Hello',
-      apiKey: apiKey
+      apiKey: apiKey,
+      currentUrl: window.location.href
     });
     
     if (!testResponse.success) {
@@ -437,7 +438,8 @@ async function translateWithCache(text, apiKey, textStyle) {
         action: 'translate',
         text: text,
         apiKey: apiKey,
-        textStyle: textStyle
+        textStyle: textStyle,
+        currentUrl: window.location.href
       }, (response) => {
         // Check for runtime errors
         if (chrome.runtime.lastError) {
@@ -534,7 +536,8 @@ async function handleTranslatePageFull() {
     const testResponse = await chrome.runtime.sendMessage({
       action: 'translate',
       text: 'Hello',
-      apiKey: apiKey
+      apiKey: apiKey,
+      currentUrl: window.location.href
     });
     const actualModel = testResponse.modelUsed || preferredModel || 'gemini-2.5-flash-lite';
 
@@ -785,7 +788,8 @@ async function handleTranslateSelection(text) {
     const response = await chrome.runtime.sendMessage({
       action: 'translate',
       text: text,
-      apiKey: apiKey
+      apiKey: apiKey,
+      currentUrl: window.location.href
     });
 
     if (response.success) {

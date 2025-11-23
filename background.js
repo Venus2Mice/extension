@@ -1,4 +1,6 @@
 // Background Service Worker
+importScripts('domain-analyzer.js');
+
 chrome.runtime.onInstalled.addListener(() => {
   // Create context menu
   chrome.contextMenus.create({
@@ -67,11 +69,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
   
   if (request.action === 'translate') {
-    translateText(request.text, request.apiKey, request.textStyle)
+    translateText(request.text, request.apiKey, request.textStyle, request.currentUrl)
       .then(result => sendResponse({ 
         success: true, 
         translation: result.translation,
-        modelUsed: result.modelUsed
+        modelUsed: result.modelUsed,
+        domainContext: result.domainContext
       }))
       .catch(error => sendResponse({ success: false, error: error.message }));
     return true;
@@ -80,6 +83,27 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'testModels') {
     testAvailableModels(request.apiKey)
       .then(result => sendResponse(result))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+  
+  if (request.action === 'analyzeDomain') {
+    getDomainProfile(request.url, request.apiKey)
+      .then(profile => sendResponse({ success: true, profile }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+  
+  if (request.action === 'getDomainStats') {
+    getDomainCacheStats()
+      .then(stats => sendResponse({ success: true, stats }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+  
+  if (request.action === 'clearDomainCache') {
+    clearDomainCache()
+      .then(() => sendResponse({ success: true }))
       .catch(error => sendResponse({ success: false, error: error.message }));
     return true;
   }
@@ -162,13 +186,27 @@ function extractRetryDelay(errorData) {
 }
 
 // Translate text using Gemini API
-async function translateText(text, apiKey, textStyle) {
+async function translateText(text, apiKey, textStyle, currentUrl) {
   console.log('[Gemini Translator BG] Translating text:', text.substring(0, 100));
   console.log('[Gemini Translator BG] Text style:', textStyle ? textStyle.name : 'default');
+  console.log('[Gemini Translator BG] Current URL:', currentUrl);
   
   if (!apiKey) {
     console.error('[Gemini Translator BG] No API key provided');
     throw new Error('API key chưa được cấu hình. Vui lòng thêm Gemini API key trong popup.');
+  }
+
+  // Get domain profile if URL provided
+  let domainProfile = null;
+  if (currentUrl) {
+    try {
+      domainProfile = await getDomainProfile(currentUrl, apiKey);
+      if (domainProfile && !domainProfile.isFallback) {
+        console.log(`[Gemini Translator BG] Using domain profile: ${domainProfile.websiteType} (${domainProfile.contentTone})`);
+      }
+    } catch (error) {
+      console.warn('[Gemini Translator BG] Failed to get domain profile:', error);
+    }
   }
 
   // Get preferred model from settings
@@ -200,7 +238,7 @@ async function translateText(text, apiKey, textStyle) {
   for (const model of models) {
     try {
       console.log('[Gemini Translator BG] Trying model:', model);
-      const result = await tryTranslate(text, apiKey, model, textStyle);
+      const result = await tryTranslate(text, apiKey, model, textStyle, domainProfile);
       console.log('[Gemini Translator BG] ✓ Success with model:', model);
       
       // Update preferred model if this one succeeded and it's not already preferred
@@ -209,7 +247,15 @@ async function translateText(text, apiKey, textStyle) {
         chrome.storage.sync.set({ preferredModel: model });
       }
       
-      return { translation: result, modelUsed: model };
+      return { 
+        translation: result, 
+        modelUsed: model,
+        domainContext: domainProfile ? {
+          domain: domainProfile.domain,
+          type: domainProfile.websiteType,
+          tone: domainProfile.contentTone
+        } : null
+      };
     } catch (error) {
       const errorInfo = error.apiError || {};
       
@@ -296,28 +342,94 @@ async function testAvailableModels(apiKey) {
   };
 }
 
-async function tryTranslate(text, apiKey, model, textStyle) {
+// Parse translation response - handles JSON format with fallback
+function parseTranslationResponse(rawText) {
+  try {
+    // Remove markdown code blocks if present
+    let cleanText = rawText.trim();
+    if (cleanText.startsWith('```json')) {
+      cleanText = cleanText.replace(/^```json\s*\n?/, '').replace(/\n?```\s*$/, '');
+    } else if (cleanText.startsWith('```')) {
+      cleanText = cleanText.replace(/^```\s*\n?/, '').replace(/\n?```\s*$/, '');
+    }
+    
+    // Try parse as JSON first
+    if (cleanText.startsWith('{')) {
+      try {
+        const jsonData = JSON.parse(cleanText);
+        const translations = jsonData.translations || jsonData;
+        
+        // Convert back to [0]text\n[1]text format
+        const lines = [];
+        const keys = Object.keys(translations).sort((a, b) => parseInt(a) - parseInt(b));
+        
+        // Fill missing indexes
+        if (keys.length > 0) {
+          const maxKey = Math.max(...keys.map(k => parseInt(k)));
+          for (let i = 0; i <= maxKey; i++) {
+            const key = i.toString();
+            if (translations[key] !== undefined) {
+              lines.push(`[${i}]${translations[key]}`);
+            } else {
+              console.warn(`[Gemini Translator BG] Missing index ${i}`);
+              lines.push(`[${i}]`);
+            }
+          }
+        }
+        
+        console.log('[Gemini Translator BG] Parsed JSON successfully:', lines.length, 'lines');
+        return lines.join('\n');
+      } catch (e) {
+        console.warn('[Gemini Translator BG] JSON parse failed, trying text format');
+      }
+    }
+    
+    // Fallback: Treat as text format [0]...\n[1]...
+    if (cleanText.includes('[0]') || cleanText.includes('[1]')) {
+      console.log('[Gemini Translator BG] Using text format');
+      return cleanText;
+    }
+    
+    // Last resort: return raw
+    console.warn('[Gemini Translator BG] No valid format, returning raw text');
+    return rawText;
+    
+  } catch (error) {
+    console.warn('[Gemini Translator BG] Parser error:', error.message);
+    return rawText;
+  }
+}
+
+async function tryTranslate(text, apiKey, model, textStyle, domainProfile) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
   
-  // Optimized prompt - balance between clarity and token usage
+  // Build instruction from textStyle and domainProfile
   let instruction = '';
-  if (textStyle && textStyle.type !== 'general') {
-    instruction = textStyle.instruction + '\n';
+  
+  // Add domain-specific context first (higher priority)
+  if (domainProfile && !domainProfile.isFallback) {
+    const domainInstruction = buildDomainInstruction(domainProfile);
+    if (domainInstruction) {
+      instruction += domainInstruction + '\n';
+    }
   }
   
-  const promptText = `${instruction}CRITICAL INSTRUCTION: You MUST translate ALL text to VIETNAMESE (Tiếng Việt) language!
+  // Add text style instruction
+  if (textStyle && textStyle.type !== 'general') {
+    instruction += textStyle.instruction + '\n';
+  }
+  
+  const promptText = `${instruction}Translate ALL text to Vietnamese (Tiếng Việt).
 
-DO NOT keep original Chinese/English text. Every line MUST be translated to Vietnamese.
-
-Format requirement:
-- Input: [0]原文 [1]文本 [2]内容
-- Output: [0]Bản dịch [1]Văn bản [2]Nội dung
+Format: Keep [number] prefix exactly as shown
+Input:  [0]text [1]more text [2]content
+Output: [0]bản dịch [1]nhiều text hơn [2]nội dung
 
 Rules:
-1. Keep [number] prefix EXACTLY as shown
-2. Translate EVERY line to Vietnamese - NO exceptions
-3. Process from FIRST [0] to LAST line in order
-4. If you return Chinese/English text instead of Vietnamese, the task FAILS
+1. Keep [N] prefix for EVERY line
+2. Translate line-by-line in order
+3. Do NOT skip any line numbers
+4. Empty lines → [N] with no text
 
 Text to translate:
 ${text}`;
@@ -329,9 +441,27 @@ ${text}`;
       }]
     }],
     generationConfig: {
-      temperature: 0.1,
+      temperature: 0.2,
       maxOutputTokens: 8192,
-    }
+    },
+    safetySettings: [
+      {
+        category: "HARM_CATEGORY_HARASSMENT",
+        threshold: "BLOCK_NONE"
+      },
+      {
+        category: "HARM_CATEGORY_HATE_SPEECH",
+        threshold: "BLOCK_NONE"
+      },
+      {
+        category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+        threshold: "BLOCK_NONE"
+      },
+      {
+        category: "HARM_CATEGORY_DANGEROUS_CONTENT",
+        threshold: "BLOCK_NONE"
+      }
+    ]
   };
   
   console.log('[Gemini Translator BG] Calling API URL:', url.replace(apiKey, 'KEY_HIDDEN'));
@@ -368,6 +498,13 @@ ${text}`;
     const data = await response.json();
     console.log('[Gemini Translator BG] API response data:', JSON.stringify(data).substring(0, 300));
     
+    // Check for content blocking
+    if (data.promptFeedback && data.promptFeedback.blockReason) {
+      const blockReason = data.promptFeedback.blockReason;
+      console.error(`[Gemini Translator BG] Content blocked: ${blockReason}`);
+      throw new Error(`Gemini blocked content (${blockReason}). Vui lòng thử lại hoặc chọn nội dung khác.`);
+    }
+    
     // Check for various response formats
     if (data.candidates && data.candidates.length > 0) {
       const candidate = data.candidates[0];
@@ -379,7 +516,11 @@ ${text}`;
       }
       
       if (candidate.content && candidate.content.parts && candidate.content.parts.length > 0) {
-        const translation = candidate.content.parts[0].text;
+        const rawText = candidate.content.parts[0].text;
+        console.log('[Gemini Translator BG] Raw response:', rawText.substring(0, 200));
+        
+        // Parse JSON response
+        const translation = parseTranslationResponse(rawText);
         console.log('[Gemini Translator BG] Translation successful:', translation.substring(0, 100));
         return translation;
       }

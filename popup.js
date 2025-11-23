@@ -2,6 +2,7 @@
 document.addEventListener('DOMContentLoaded', () => {
   loadApiKey();
   loadCacheInfo();
+  loadDomainStats();
   
   // Save API Key
   document.getElementById('saveApiKey').addEventListener('click', saveApiKey);
@@ -17,6 +18,10 @@ document.addEventListener('DOMContentLoaded', () => {
   
   // Clear cache
   document.getElementById('clearCache').addEventListener('click', clearCache);
+  
+  // Domain management
+  document.getElementById('refreshDomains').addEventListener('click', loadDomainStats);
+  document.getElementById('clearDomains').addEventListener('click', clearDomainCache);
   
   // Allow Enter key to save API key
   document.getElementById('apiKey').addEventListener('keypress', (e) => {
@@ -273,5 +278,68 @@ async function clearCache() {
     }
   } catch (error) {
     showStatus('Lỗi khi xóa cache: ' + error.message, 'error');
+  }
+}
+
+// Load domain statistics
+async function loadDomainStats() {
+  try {
+    const response = await chrome.runtime.sendMessage({ action: 'getDomainStats' });
+    const statsDiv = document.getElementById('domainStats');
+    
+    if (response.success && response.stats) {
+      const stats = response.stats;
+      
+      if (stats.totalDomains === 0) {
+        statsDiv.innerHTML = '<div style="color: #999;">Chưa có domain nào được phân tích</div>';
+      } else {
+        let html = `<div style="margin-bottom: 8px;"><strong>${stats.totalDomains} domains</strong> - ${stats.totalUsage} lần sử dụng</div>`;
+        
+        // Show top 5 domains
+        const topDomains = stats.domains
+          .sort((a, b) => b.usageCount - a.usageCount)
+          .slice(0, 5);
+        
+        html += '<div style="font-size: 12px; max-height: 120px; overflow-y: auto;">';
+        for (const d of topDomains) {
+          html += `
+            <div style="padding: 4px 0; border-bottom: 1px solid #eee;">
+              <div style="font-weight: 500;">${d.domain}</div>
+              <div style="color: #666; font-size: 11px;">
+                ${d.type} • ${d.usageCount} lần • ${d.age} ngày
+              </div>
+            </div>
+          `;
+        }
+        html += '</div>';
+        
+        statsDiv.innerHTML = html;
+      }
+    } else {
+      statsDiv.textContent = 'Không thể tải thống kê';
+    }
+  } catch (error) {
+    console.error('Error loading domain stats:', error);
+    document.getElementById('domainStats').textContent = 'Lỗi khi tải';
+  }
+}
+
+// Clear domain cache
+async function clearDomainCache() {
+  if (!confirm('Xóa tất cả domain profiles? AI sẽ phải học lại văn phong các trang web.')) {
+    return;
+  }
+  
+  try {
+    const response = await chrome.runtime.sendMessage({ action: 'clearDomainCache' });
+    
+    if (response.success) {
+      showStatus('✓ Đã xóa domain cache!', 'success');
+      loadDomainStats();
+    } else {
+      showStatus('Lỗi: ' + response.error, 'error');
+    }
+  } catch (error) {
+    showStatus('Lỗi: ' + error.message, 'error');
   }
 }
