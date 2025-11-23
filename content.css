@@ -232,3 +232,94 @@
   color: #667eea;
   text-align: center;
 }
+
+/* Sticky Notification for Model and Writing Style */
+.gemini-translator-sticky-notification {
+  position: fixed;
+  top: 20px;
+  left: 20px;
+  z-index: 999998;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  min-width: 280px;
+  max-width: 350px;
+  opacity: 0;
+  transform: translateX(-400px);
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.gemini-translator-sticky-notification.show {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.gemini-translator-sticky-notification.fade-out {
+  opacity: 0;
+  transform: translateX(-400px);
+}
+
+.sticky-notification-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.sticky-notification-title {
+  color: white;
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.sticky-notification-close {
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  color: white;
+  font-size: 20px;
+  cursor: pointer;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+  line-height: 1;
+  padding: 0;
+}
+
+.sticky-notification-close:hover {
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.sticky-notification-content {
+  padding: 14px 16px;
+}
+
+.sticky-notification-item {
+  color: white;
+  font-size: 13px;
+  margin-bottom: 8px;
+  display: flex;
+  gap: 8px;
+}
+
+.sticky-notification-item:last-child {
+  margin-bottom: 0;
+}
+
+.sticky-notification-item strong {
+  min-width: 70px;
+  opacity: 0.9;
+}
+
+.sticky-notification-value {
+  font-weight: 500;
+  background: rgba(255, 255, 255, 0.2);
+  padding: 2px 8px;
+  border-radius: 4px;
+  flex: 1;
+}

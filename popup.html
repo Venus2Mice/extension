@@ -16,7 +16,10 @@
     <div class="section">
       <label for="apiKey">Gemini API Key:</label>
       <input type="password" id="apiKey" placeholder="Nhập API key của bạn">
-      <button id="saveApiKey" class="btn btn-primary">Lưu API Key</button>
+      <div style="display: flex; gap: 10px; margin-top: 10px;">
+        <button id="saveApiKey" class="btn btn-primary" style="flex: 1;">Lưu API Key</button>
+        <button id="testConnection" class="btn btn-secondary" style="flex: 1;">🔍 Kiểm tra Kết nối</button>
+      </div>
       <p class="help-text">
         Lấy API key miễn phí tại: 
         <a href="https://makersuite.google.com/app/apikey" target="_blank">Google AI Studio</a>
@@ -31,12 +34,7 @@
         <option value="gemini-flash-latest">Gemini Flash Latest (Mới nhất)</option>
         <option value="gemini-2.0-flash-lite">Gemini 2.0 Flash Lite</option>
         <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
-        <option value="gemini-1.5-flash-latest">Gemini 1.5 Flash Latest</option>
-        <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
-        <option value="gemini-1.5-pro-latest">Gemini 1.5 Pro Latest (Mạnh hơn)</option>
         <option value="gemini-exp-1206">Gemini Exp 1206 (Thử nghiệm)</option>
-        <option value="gemini-3-pro-preview">Gemini 3 Pro Preview (Thử nghiệm)</option>
-        <option value="gemini-pro">Gemini Pro (Dự phòng)</option>
       </select>
       <p class="help-text">
         Model sẽ được ưu tiên sử dụng. Nếu hết quota hoặc lỗi, tự động chuyển sang model khác.
@@ -57,9 +55,10 @@
     <div class="section">
       <h3>Cách sử dụng:</h3>
       <ul class="instructions">
-        <li><strong>Dịch toàn trang:</strong> Click chuột phải → "Dịch trang này sang tiếng Việt"</li>
+        <li><strong>Dịch Lazy (Mặc định):</strong> Click chuột phải → "Dịch trang (Lazy)" - Dịch theo scroll, phù hợp trang lớn</li>
+        <li><strong>Dịch toàn bộ:</strong> Click chuột phải → "Dịch toàn bộ trang (Full)" - Dịch ngay lập tức toàn bộ</li>
         <li><strong>Dịch văn bản:</strong> Chọn text → Click chuột phải → "Dịch văn bản đã chọn"</li>
-        <li><strong>Khôi phục:</strong> Click lại "Dịch trang này" để khôi phục bản gốc</li>
+        <li><strong>Khôi phục:</strong> Click lại "Dịch trang" để khôi phục bản gốc</li>
       </ul>
     </div>
 

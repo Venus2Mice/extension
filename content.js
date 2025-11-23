@@ -182,8 +182,9 @@ async function handleTranslatePage() {
   try {
     // Get API key
     console.log('[Gemini Translator] Fetching API key...');
-    const { apiKey } = await chrome.runtime.sendMessage({ action: 'getApiKey' });
+    const { apiKey, preferredModel } = await chrome.runtime.sendMessage({ action: 'getApiKey' });
     console.log('[Gemini Translator] API key received:', apiKey ? 'Yes (length: ' + apiKey.length + ')' : 'No');
+    console.log('[Gemini Translator] Preferred model:', preferredModel);
     
     if (!apiKey) {
       showNotification('Vui lòng cấu hình Gemini API key trong popup extension', 'error');
@@ -207,6 +208,7 @@ async function handleTranslatePage() {
     }
     
     console.log('[Gemini Translator] API test successful! Response:', testResponse.translation);
+    const actualModel = testResponse.modelUsed || preferredModel || 'gemini-2.5-flash-lite';
 
     // Save original content
     if (!originalContent) {
@@ -227,12 +229,13 @@ async function handleTranslatePage() {
     console.log('[Gemini Translator] Total characters:', totalChars);
     
     // Determine translation strategy
-    const LAZY_MODE_THRESHOLD = 5000; // If more than 5000 chars, use lazy mode
+    // CHANGED: Lower threshold to 3000 chars to make lazy mode default for most pages
+    const LAZY_MODE_THRESHOLD = 3000; // If more than 3000 chars, use lazy mode
     
     if (totalChars > LAZY_MODE_THRESHOLD) {
       console.log('[Gemini Translator] Large page detected, using lazy translation mode');
       showNotification(`Trang lớn (${Math.round(totalChars/1000)}KB text), dịch theo scroll...`, 'info');
-      await startLazyTranslation(textNodes, apiKey);
+      await startLazyTranslation(textNodes, apiKey, actualModel);
       return;
     }
     
@@ -285,6 +288,9 @@ async function handleTranslatePage() {
     // Detect text style/tone for better translation
     const textStyle = detectTextStyle(textMap);
     console.log('[Gemini Translator] Detected text style:', textStyle);
+    
+    // Show sticky notification with model and writing style
+    showStickyNotification(actualModel, textStyle);
     showNotification(`Phát hiện văn phong: ${textStyle.name}`, 'info');
     
     // Translate each chunk with retry logic
@@ -452,13 +458,44 @@ async function translateWithCache(text, apiKey, textStyle) {
   });
   
   if (response.success) {
+    // Validate that translation is actually in Vietnamese
+    const translation = response.translation;
+    if (!isVietnameseText(translation)) {
+      console.warn('[Gemini Translator] Warning: Translation might not be Vietnamese');
+      console.warn('[Gemini Translator] Sample:', translation.substring(0, 200));
+      // Don't throw error, but log warning - still cache it
+    }
+    
     // Cache the result
-    translationCache.set(cacheKey, response.translation);
+    translationCache.set(cacheKey, translation);
     saveCache();
-    return response.translation;
+    return translation;
   } else {
     throw new Error(response.error);
   }
+}
+
+// Check if text contains Vietnamese characters
+function isVietnameseText(text) {
+  // Vietnamese has special characters with diacritics
+  const vietnameseChars = /[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i;
+  const chineseChars = /[\u4e00-\u9fff]/;
+  
+  // Sample first 500 chars
+  const sample = text.substring(0, 500);
+  
+  // If it has Chinese chars and no Vietnamese chars, it's likely Chinese
+  if (chineseChars.test(sample) && !vietnameseChars.test(sample)) {
+    return false;
+  }
+  
+  // If it has Vietnamese chars, it's likely Vietnamese
+  if (vietnameseChars.test(sample)) {
+    return true;
+  }
+  
+  // For text without special chars (like numbers, English), assume OK
+  return true;
 }
 
 // Handle full page translation (no lazy mode, with progress bar)
@@ -484,7 +521,7 @@ async function handleTranslatePageFull() {
 
   try {
     // Get API key
-    const { apiKey } = await chrome.runtime.sendMessage({ action: 'getApiKey' });
+    const { apiKey, preferredModel } = await chrome.runtime.sendMessage({ action: 'getApiKey' });
     
     if (!apiKey) {
       showNotification('Vui lòng cấu hình Gemini API key trong popup extension', 'error');
@@ -492,6 +529,14 @@ async function handleTranslatePageFull() {
       hideProgressBar();
       return;
     }
+    
+    // Test API to get actual model being used
+    const testResponse = await chrome.runtime.sendMessage({
+      action: 'translate',
+      text: 'Hello',
+      apiKey: apiKey
+    });
+    const actualModel = testResponse.modelUsed || preferredModel || 'gemini-2.5-flash-lite';
 
     // Save original content
     if (!originalContent) {
@@ -546,12 +591,60 @@ async function handleTranslatePageFull() {
     const textStyle = detectTextStyle(textMap);
     console.log('[Gemini Translator] Detected text style:', textStyle);
     
+    // Show sticky notification with model and writing style
+    showStickyNotification(actualModel, textStyle);
+    
     // Translate each chunk with progress
     let totalApplied = 0;
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       console.log(`[Gemini Translator] Translating chunk ${i+1}/${chunks.length}...`);
       updateProgressBar(i, chunks.length);
+      
+      // Retry logic with language validation
+      let retryCount = 0;
+      const maxRetries = 2;
+      let translation = null;
+      
+      while (retryCount <= maxRetries) {
+        try {
+          translation = await translateWithCache(chunk.text, apiKey, textStyle);
+          
+          // Validate language - check if it's actually Vietnamese
+          if (!isVietnameseText(translation)) {
+            console.warn(`[Gemini Translator] Chunk ${i+1} attempt ${retryCount+1}: Not Vietnamese, retrying...`);
+            console.warn(`[Gemini Translator] Sample: ${translation.substring(0, 150)}`);
+            
+            if (retryCount < maxRetries) {
+              // Clear cache for this chunk to force re-translation
+              const cacheKey = getCacheKey(chunk.text, textStyle);
+              translationCache.delete(cacheKey);
+              retryCount++;
+              await sleep(500);
+              continue;
+            } else {
+              console.error(`[Gemini Translator] Chunk ${i+1}: Failed after ${maxRetries+1} attempts - not Vietnamese`);
+              // Continue anyway, but log error
+            }
+          }
+          
+          // If we get here, translation is OK
+          break;
+          
+        } catch (error) {
+          console.error(`[Gemini Translator] Chunk ${i+1} attempt ${retryCount+1} error:`, error);
+          if (retryCount < maxRetries) {
+            retryCount++;
+            await sleep(1000);
+          } else {
+            throw error;
+          }
+        }
+      }
+      
+      if (!translation) {
+        throw new Error(`Failed to translate chunk ${i+1}`);
+      }
       
       try {
         const translation = await translateWithCache(chunk.text, apiKey, textStyle);
@@ -788,6 +881,47 @@ function showNotification(message, type = 'info') {
   }, 3000);
 }
 
+// Show sticky notification with model and writing style info
+function showStickyNotification(modelName, textStyle) {
+  // Remove existing sticky notification if any
+  const existing = document.getElementById('gemini-translator-sticky-notification');
+  if (existing) {
+    existing.remove();
+  }
+  
+  const notification = document.createElement('div');
+  notification.id = 'gemini-translator-sticky-notification';
+  notification.className = 'gemini-translator-sticky-notification';
+  notification.innerHTML = `
+    <div class="sticky-notification-header">
+      <span class="sticky-notification-title">🌐 Gemini Translator</span>
+      <button class="sticky-notification-close" title="Đóng">✕</button>
+    </div>
+    <div class="sticky-notification-content">
+      <div class="sticky-notification-item">
+        <strong>Model:</strong> <span class="sticky-notification-value">${escapeHtml(modelName)}</span>
+      </div>
+      <div class="sticky-notification-item">
+        <strong>Văn phong:</strong> <span class="sticky-notification-value">${escapeHtml(textStyle.name)}</span>
+      </div>
+    </div>
+  `;
+  
+  document.body.appendChild(notification);
+  
+  // Add close button handler
+  const closeBtn = notification.querySelector('.sticky-notification-close');
+  closeBtn.addEventListener('click', () => {
+    notification.classList.add('fade-out');
+    setTimeout(() => notification.remove(), 300);
+  });
+  
+  // Show with animation
+  setTimeout(() => {
+    notification.classList.add('show');
+  }, 10);
+}
+
 // Show loading indicator
 function showLoadingIndicator() {
   let indicator = document.getElementById('gemini-translator-loading');
@@ -865,7 +999,7 @@ function sleep(ms) {
 }
 
 // Start lazy translation mode (translate as user scrolls)
-async function startLazyTranslation(textNodes, apiKey) {
+async function startLazyTranslation(textNodes, apiKey, modelName) {
   isLazyMode = true;
   
   // Detect text style and preserve whitespace
@@ -884,6 +1018,9 @@ async function startLazyTranslation(textNodes, apiKey) {
   
   const textStyle = detectTextStyle(textMap);
   console.log('[Gemini Translator] Detected text style:', textStyle);
+  
+  // Show sticky notification with model and writing style
+  showStickyNotification(modelName || 'gemini-2.5-flash-lite', textStyle);
   
   // Mark all nodes as pending
   pendingTranslations = textMap;

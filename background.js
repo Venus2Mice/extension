@@ -3,7 +3,7 @@ chrome.runtime.onInstalled.addListener(() => {
   // Create context menu
   chrome.contextMenus.create({
     id: 'translatePage',
-    title: 'Dịch trang này sang tiếng Việt (Lazy)',
+    title: 'Dịch trang (Lazy - Mặc định)',
     contexts: ['page']
   });
 
@@ -60,15 +60,26 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 // Handle messages from content script or popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'getApiKey') {
-    chrome.storage.sync.get(['geminiApiKey'], (result) => {
-      sendResponse({ apiKey: result.geminiApiKey || '' });
+    chrome.storage.sync.get(['geminiApiKey', 'preferredModel'], (result) => {
+      sendResponse({ apiKey: result.geminiApiKey || '', preferredModel: result.preferredModel || 'gemini-2.5-flash-lite' });
     });
     return true; // Keep the message channel open for async response
   }
   
   if (request.action === 'translate') {
     translateText(request.text, request.apiKey, request.textStyle)
-      .then(translation => sendResponse({ success: true, translation }))
+      .then(result => sendResponse({ 
+        success: true, 
+        translation: result.translation,
+        modelUsed: result.modelUsed
+      }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+  
+  if (request.action === 'testModels') {
+    testAvailableModels(request.apiKey)
+      .then(result => sendResponse(result))
       .catch(error => sendResponse({ success: false, error: error.message }));
     return true;
   }
@@ -105,6 +116,51 @@ async function ensureContentScript(tabId) {
   }
 }
 
+// Helper: Parse API error to get meaningful info
+function parseApiError(errorText, statusCode) {
+  try {
+    const errorData = JSON.parse(errorText);
+    if (errorData.error) {
+      const error = errorData.error;
+      return {
+        code: error.code || statusCode,
+        message: error.message || 'Unknown error',
+        status: error.status || 'UNKNOWN',
+        isNotFound: error.code === 404 || error.status === 'NOT_FOUND',
+        isQuotaExceeded: error.code === 429 || error.status === 'RESOURCE_EXHAUSTED',
+        retryAfter: extractRetryDelay(errorData)
+      };
+    }
+  } catch (e) {
+    // If can't parse, return basic info
+  }
+  return {
+    code: statusCode,
+    message: errorText.substring(0, 200),
+    status: 'UNKNOWN',
+    isNotFound: statusCode === 404,
+    isQuotaExceeded: statusCode === 429,
+    retryAfter: null
+  };
+}
+
+// Helper: Extract retry delay from error response
+function extractRetryDelay(errorData) {
+  try {
+    if (errorData.error && errorData.error.details) {
+      for (const detail of errorData.error.details) {
+        if (detail['@type'] === 'type.googleapis.com/google.rpc.RetryInfo' && detail.retryDelay) {
+          const delay = detail.retryDelay.replace('s', '');
+          return parseFloat(delay) * 1000; // Convert to milliseconds
+        }
+      }
+    }
+  } catch (e) {
+    // Ignore parsing errors
+  }
+  return null;
+}
+
 // Translate text using Gemini API
 async function translateText(text, apiKey, textStyle) {
   console.log('[Gemini Translator BG] Translating text:', text.substring(0, 100));
@@ -119,19 +175,15 @@ async function translateText(text, apiKey, textStyle) {
   const settings = await chrome.storage.sync.get(['preferredModel']);
   const preferredModel = settings.preferredModel || 'gemini-2.5-flash-lite';
 
-  // List of Gemini models to try (from fastest/cheapest to most capable)
+  // List of Gemini models to try (only active models, verified as of Nov 2025)
+  // Removed: gemini-1.5-flash-latest, gemini-1.5-flash, gemini-1.5-pro-latest, gemini-pro (404 errors)
   const allModels = [
     'gemini-2.5-flash-lite',
     'gemini-2.5-flash',
     'gemini-flash-latest',
     'gemini-2.0-flash-lite',
     'gemini-2.0-flash',
-    'gemini-1.5-flash-latest',
-    'gemini-1.5-flash',
-    'gemini-1.5-pro-latest',
-    'gemini-exp-1206',
-    'gemini-3-pro-preview',
-    'gemini-pro'
+    'gemini-exp-1206'
   ];
   
   // Prioritize preferred model first, then others
@@ -140,6 +192,8 @@ async function translateText(text, apiKey, textStyle) {
   console.log('[Gemini Translator BG] Model priority:', models[0], '(preferred)');
   
   let lastError = null;
+  let quotaErrors = 0;
+  let notFoundErrors = 0;
   
   for (const model of models) {
     try {
@@ -153,23 +207,91 @@ async function translateText(text, apiKey, textStyle) {
         chrome.storage.sync.set({ preferredModel: model });
       }
       
-      return result;
+      return { translation: result, modelUsed: model };
     } catch (error) {
-      console.warn('[Gemini Translator BG] ✗ Failed with model:', model, '-', error.message);
-      lastError = error;
+      const errorInfo = error.apiError || {};
       
-      // If it's a quota error (429), wait a bit before trying next model
-      if (error.message.includes('429') || error.message.includes('quota')) {
-        console.log('[Gemini Translator BG] Quota exceeded, switching to next model...');
-        await new Promise(resolve => setTimeout(resolve, 500));
+      // Handle 404 - Model not found (silently skip)
+      if (errorInfo.isNotFound) {
+        notFoundErrors++;
+        console.log(`[Gemini Translator BG] ⊗ Model not available: ${model}`);
+        continue;
       }
-      // Continue to next model
+      
+      // Handle 429 - Quota exceeded
+      if (errorInfo.isQuotaExceeded) {
+        quotaErrors++;
+        const retryAfter = errorInfo.retryAfter || 500;
+        console.log(`[Gemini Translator BG] ⚠ Quota exceeded for ${model}, waiting ${Math.round(retryAfter/1000)}s...`);
+        await new Promise(resolve => setTimeout(resolve, Math.min(retryAfter, 2000))); // Max 2s wait
+        lastError = error;
+        continue;
+      }
+      
+      // Other errors
+      console.warn(`[Gemini Translator BG] ✗ Error with ${model}: ${errorInfo.status || error.message}`);
+      lastError = error;
     }
   }
   
-  // If all models failed, throw the last error
+  // If all models failed, throw informative error
   console.error('[Gemini Translator BG] All models failed!');
-  throw lastError;
+  console.error(`[Gemini Translator BG] Summary: ${notFoundErrors} not found, ${quotaErrors} quota exceeded`);
+  
+  if (quotaErrors > 0 && notFoundErrors === models.length - quotaErrors) {
+    throw new Error('Tất cả models đã hết quota. Vui lòng đợi hoặc nâng cấp API key.');
+  } else if (notFoundErrors === models.length) {
+    throw new Error('Không tìm thấy model nào khả dụng. Vui lòng kiểm tra lại API key.');
+  } else if (lastError) {
+    throw lastError;
+  } else {
+    throw new Error('Không thể dịch văn bản. Vui lòng thử lại.');
+  }
+}
+
+// Test available models
+async function testAvailableModels(apiKey) {
+  console.log('[Gemini Translator BG] Testing available models...');
+  
+  const allModels = [
+    'gemini-2.5-flash-lite',
+    'gemini-2.5-flash',
+    'gemini-flash-latest',
+    'gemini-2.0-flash-lite',
+    'gemini-2.0-flash',
+    'gemini-exp-1206'
+  ];
+  
+  const availableModels = [];
+  let workingModel = null;
+  
+  // Test each model with a simple translation
+  for (const model of allModels) {
+    try {
+      console.log('[Gemini Translator BG] Testing model:', model);
+      await tryTranslate('Hello', apiKey, model, null);
+      availableModels.push(model);
+      if (!workingModel) workingModel = model;
+      console.log('[Gemini Translator BG] ✓ Model working:', model);
+    } catch (error) {
+      const errorInfo = error.apiError || {};
+      if (errorInfo.isNotFound) {
+        console.log(`[Gemini Translator BG] ⊗ Model not available: ${model}`);
+      } else if (errorInfo.isQuotaExceeded) {
+        console.log(`[Gemini Translator BG] ⚠ Quota exceeded: ${model}`);
+      } else {
+        console.log(`[Gemini Translator BG] ✗ Model failed: ${model}`);
+      }
+    }
+  }
+  
+  console.log('[Gemini Translator BG] Available models:', availableModels);
+  
+  return {
+    success: true,
+    availableModels: availableModels,
+    workingModel: workingModel || 'gemini-2.5-flash-lite'
+  };
 }
 
 async function tryTranslate(text, apiKey, model, textStyle) {
@@ -181,14 +303,19 @@ async function tryTranslate(text, apiKey, model, textStyle) {
     instruction = textStyle.instruction + '\n';
   }
   
-  const promptText = `${instruction}CRITICAL: Translate ALL lines below to Vietnamese. Do NOT skip ANY line!
+  const promptText = `${instruction}CRITICAL INSTRUCTION: You MUST translate ALL text to VIETNAMESE (Tiếng Việt) language!
 
-Format: Keep [number] exactly as shown, translate text to Vietnamese.
-Example:
-Input: [0]Home [1]About [2]Contact
-Output: [0]Trang chủ [1]Giới thiệu [2]Liên hệ
+DO NOT keep original Chinese/English text. Every line MUST be translated to Vietnamese.
 
-WARNING: If you skip even ONE line, the translation fails. Process EVERY [number] from first to last.
+Format requirement:
+- Input: [0]原文 [1]文本 [2]内容
+- Output: [0]Bản dịch [1]Văn bản [2]Nội dung
+
+Rules:
+1. Keep [number] prefix EXACTLY as shown
+2. Translate EVERY line to Vietnamese - NO exceptions
+3. Process from FIRST [0] to LAST line in order
+4. If you return Chinese/English text instead of Vietnamese, the task FAILS
 
 Text to translate:
 ${text}`;
@@ -220,8 +347,20 @@ ${text}`;
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('[Gemini Translator BG] API error response:', errorText);
-      throw new Error(`API error: ${response.status} - ${errorText.substring(0, 100)}`);
+      const errorInfo = parseApiError(errorText, response.status);
+      
+      // Log concisely based on error type
+      if (errorInfo.isNotFound) {
+        console.log(`[Gemini Translator BG] Model not found (404): ${model}`);
+      } else if (errorInfo.isQuotaExceeded) {
+        console.warn(`[Gemini Translator BG] Quota exceeded (429) for ${model}`);
+      } else {
+        console.error(`[Gemini Translator BG] API error ${errorInfo.code}:`, errorInfo.message.substring(0, 150));
+      }
+      
+      const error = new Error(errorInfo.message);
+      error.apiError = errorInfo;
+      throw error;
     }
 
     const data = await response.json();

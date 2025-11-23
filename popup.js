@@ -6,6 +6,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // Save API Key
   document.getElementById('saveApiKey').addEventListener('click', saveApiKey);
   
+  // Test connection
+  document.getElementById('testConnection').addEventListener('click', testConnection);
+  
   // Translate current page
   document.getElementById('translateCurrentPage').addEventListener('click', translateCurrentPage);
   
@@ -49,6 +52,7 @@ function saveApiKey() {
     geminiApiKey: apiKey,
     preferredModel: preferredModel 
   }, () => {
+    console.log('Saved preferredModel:', preferredModel);
     showStatus(`✓ Đã lưu! Model ưu tiên: ${preferredModel}`, 'success');
   });
 }
@@ -172,6 +176,78 @@ async function loadCacheInfo() {
   } catch (error) {
     console.error('Error loading cache info:', error);
     document.getElementById('cacheInfo').textContent = 'Không thể tải';
+  }
+}
+
+// Test connection to available models
+async function testConnection() {
+  const apiKey = document.getElementById('apiKey').value.trim();
+  
+  if (!apiKey) {
+    showStatus('Vui lòng nhập API key trước', 'error');
+    return;
+  }
+  
+  showStatus('Đang kiểm tra các model...', 'info');
+  
+  const testButton = document.getElementById('testConnection');
+  testButton.disabled = true;
+  testButton.textContent = '⏳ Đang kiểm tra...';
+  
+  try {
+    const result = await chrome.runtime.sendMessage({
+      action: 'testModels',
+      apiKey: apiKey
+    });
+    
+    if (result.success) {
+      const availableModels = result.availableModels;
+      const workingModel = result.workingModel;
+      
+      // Update the select dropdown to show only available models
+      const select = document.getElementById('preferredModel');
+      const currentValue = select.value;
+      
+      // Store all options
+      const allOptions = Array.from(select.options).map(opt => ({
+        value: opt.value,
+        text: opt.text
+      }));
+      
+      // Clear and repopulate
+      select.innerHTML = '';
+      
+      allOptions.forEach(option => {
+        const opt = document.createElement('option');
+        opt.value = option.value;
+        
+        if (availableModels.includes(option.value)) {
+          opt.text = option.text + ' ✓';
+          opt.style.color = 'green';
+        } else {
+          opt.text = option.text + ' ✗';
+          opt.style.color = 'gray';
+        }
+        
+        select.appendChild(opt);
+      });
+      
+      // Restore or set to working model
+      if (availableModels.includes(currentValue)) {
+        select.value = currentValue;
+      } else {
+        select.value = workingModel;
+      }
+      
+      showStatus(`✓ Tìm thấy ${availableModels.length} model khả dụng!`, 'success');
+    } else {
+      showStatus('Lỗi: ' + result.error, 'error');
+    }
+  } catch (error) {
+    showStatus('Lỗi khi kiểm tra: ' + error.message, 'error');
+  } finally {
+    testButton.disabled = false;
+    testButton.textContent = '🔍 Kiểm tra Kết nối';
   }
 }
 
