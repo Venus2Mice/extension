@@ -894,12 +894,25 @@ function showTranslationPopup(original, translation, selectionRect) {
 
   // Explain handler
   let explanationLoaded = false;
+  let autoCloseTimer = null;
+  
   explainBtn.addEventListener('click', async () => {
     if (!explanationLoaded) {
       explanationSection.style.display = 'block';
       await loadSemanticExplanation(original, explanationSection.querySelector('.explanation-content'));
       explanationLoaded = true;
       explainBtn.classList.add('active');
+      
+      // Extend auto-close time when explanation is loaded
+      if (autoCloseTimer) {
+        clearTimeout(autoCloseTimer);
+      }
+      autoCloseTimer = setTimeout(() => {
+        if (popup.parentElement) {
+          popup.classList.add('popup-closing');
+          setTimeout(() => popup.remove(), 200);
+        }
+      }, 60000); // 60 seconds instead of 30
     } else {
       // Toggle visibility
       if (explanationSection.style.display === 'none') {
@@ -937,8 +950,8 @@ function showTranslationPopup(original, translation, selectionRect) {
     document.addEventListener('click', closeOnClickOutside);
   }, 100);
 
-  // Auto close after 30 seconds
-  setTimeout(() => {
+  // Auto close after 30 seconds (initial timeout)
+  autoCloseTimer = setTimeout(() => {
     if (popup.parentElement) {
       popup.classList.add('popup-closing');
       setTimeout(() => popup.remove(), 200);
@@ -1061,29 +1074,221 @@ async function loadSemanticExplanation(text, container) {
   }
 }
 
-// Format explanation text
+// Format explanation text with proper markdown parsing
 function formatExplanation(text) {
-  // Convert markdown-style formatting to HTML
-  let formatted = escapeHtml(text);
+  if (!text) return '';
   
-  // Bold text: **text** or __text__
-  formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-  formatted = formatted.replace(/__(.*?)__/g, '<strong>$1</strong>');
+  // Split into lines for processing
+  let lines = text.split('\n');
+  let html = [];
+  let inList = false;
+  let inCodeBlock = false;
+  let inNumberedList = false;
+  let codeBlockContent = [];
   
-  // Italic: *text* or _text_
-  formatted = formatted.replace(/\*(.*?)\*/g, '<em>$1</em>');
-  formatted = formatted.replace(/_(.*?)_/g, '<em>$1</em>');
-  
-  // Lists: lines starting with - or •
-  formatted = formatted.replace(/^[\-•]\s+(.+)$/gm, '<li>$1</li>');
-  if (formatted.includes('<li>')) {
-    formatted = formatted.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>');
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i];
+    let trimmedLine = line.trim();
+    
+    // Handle code blocks
+    if (trimmedLine.startsWith('```')) {
+      if (inCodeBlock) {
+        // End code block
+        html.push('<div class="code-block">');
+        html.push(codeBlockContent.map(l => escapeHtml(l)).join('\n'));
+        html.push('</div>');
+        codeBlockContent = [];
+        inCodeBlock = false;
+      } else {
+        // Start code block
+        if (inList) {
+          html.push('</ul>');
+          inList = false;
+        }
+        if (inNumberedList) {
+          html.push('</ol>');
+          inNumberedList = false;
+        }
+        inCodeBlock = true;
+      }
+      continue;
+    }
+    
+    if (inCodeBlock) {
+      codeBlockContent.push(line);
+      continue;
+    }
+    
+    // Skip empty lines with proper spacing
+    if (!trimmedLine) {
+      if (inList) {
+        html.push('</ul>');
+        inList = false;
+      }
+      if (inNumberedList) {
+        html.push('</ol>');
+        inNumberedList = false;
+      }
+      html.push('<div class="explanation-spacer"></div>');
+      continue;
+    }
+    
+    // Headers: ### Header or ## Header or # Header
+    if (/^#{1,6}\s+/.test(trimmedLine)) {
+      if (inList) {
+        html.push('</ul>');
+        inList = false;
+      }
+      if (inNumberedList) {
+        html.push('</ol>');
+        inNumberedList = false;
+      }
+      
+      const level = trimmedLine.match(/^#+/)[0].length;
+      let headerText = trimmedLine.replace(/^#{1,6}\s+/, '').replace(/\s*#+\s*$/, '');
+      headerText = processInlineFormatting(headerText);
+      html.push(`<div class="explanation-header level-${level}">${headerText}</div>`);
+      continue;
+    }
+    
+    // Headers with numbers at start: "1. **Text**" or just "1. Text"
+    if (/^(\d+)\.\s+\*\*/.test(trimmedLine)) {
+      if (inList) {
+        html.push('</ul>');
+        inList = false;
+      }
+      if (inNumberedList) {
+        html.push('</ol>');
+        inNumberedList = false;
+      }
+      
+      let headerText = trimmedLine.replace(/^\d+\.\s+/, '').replace(/^\*\*/, '').replace(/\*\*:?\s*$/, '');
+      headerText = processInlineFormatting(headerText);
+      html.push(`<div class="explanation-header">${headerText}</div>`);
+      continue;
+    }
+    
+    // Numbered list items: "1. text" or "1) text"
+    if (/^(\d+)[.)]\s+/.test(trimmedLine)) {
+      if (inList) {
+        html.push('</ul>');
+        inList = false;
+      }
+      if (!inNumberedList) {
+        html.push('<ol class="explanation-numbered-list">');
+        inNumberedList = true;
+      }
+      
+      let itemText = trimmedLine.replace(/^\d+[.)]\s+/, '');
+      itemText = processInlineFormatting(itemText);
+      html.push(`<li>${itemText}</li>`);
+      continue;
+    }
+    
+    // Bullet list items: lines starting with -, •, *, or +
+    if (/^[\-\•\*\+]\s+/.test(trimmedLine)) {
+      if (inNumberedList) {
+        html.push('</ol>');
+        inNumberedList = false;
+      }
+      if (!inList) {
+        html.push('<ul class="explanation-list">');
+        inList = true;
+      }
+      
+      let itemText = trimmedLine.replace(/^[\-\•\*\+]\s+/, '');
+      itemText = processInlineFormatting(itemText);
+      html.push(`<li>${itemText}</li>`);
+      continue;
+    }
+    
+    // Blockquotes: > text
+    if (trimmedLine.startsWith('> ')) {
+      if (inList) {
+        html.push('</ul>');
+        inList = false;
+      }
+      if (inNumberedList) {
+        html.push('</ol>');
+        inNumberedList = false;
+      }
+      
+      let quoteText = trimmedLine.replace(/^>\s+/, '');
+      quoteText = processInlineFormatting(quoteText);
+      html.push(`<div class="explanation-blockquote">${quoteText}</div>`);
+      continue;
+    }
+    
+    // Horizontal rules: --- or *** or ___
+    if (/^([-*_]){3,}$/.test(trimmedLine)) {
+      if (inList) {
+        html.push('</ul>');
+        inList = false;
+      }
+      if (inNumberedList) {
+        html.push('</ol>');
+        inNumberedList = false;
+      }
+      html.push('<hr class="explanation-divider">');
+      continue;
+    }
+    
+    // Regular paragraph
+    if (inList) {
+      html.push('</ul>');
+      inList = false;
+    }
+    if (inNumberedList) {
+      html.push('</ol>');
+      inNumberedList = false;
+    }
+    
+    trimmedLine = processInlineFormatting(trimmedLine);
+    html.push(`<div class="explanation-paragraph">${trimmedLine}</div>`);
   }
   
-  // Line breaks
-  formatted = formatted.replace(/\n/g, '<br>');
+  // Close any open lists or code blocks
+  if (inList) {
+    html.push('</ul>');
+  }
+  if (inNumberedList) {
+    html.push('</ol>');
+  }
+  if (inCodeBlock && codeBlockContent.length > 0) {
+    html.push('<div class="code-block">');
+    html.push(codeBlockContent.map(l => escapeHtml(l)).join('\n'));
+    html.push('</div>');
+  }
   
-  return formatted;
+  return html.join('\n');
+}
+
+// Process inline markdown formatting (bold, italic, inline code, strikethrough)
+function processInlineFormatting(text) {
+  // Escape HTML first
+  text = escapeHtml(text);
+  
+  // Inline code: `code` (must come first to preserve content)
+  text = text.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
+  
+  // Bold: **text** or __text__ (must come before italic)
+  text = text.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>');
+  text = text.replace(/__([^_]+?)__/g, '<strong>$1</strong>');
+  
+  // Italic: *text* or _text_ (single char, not in middle of word)
+  text = text.replace(/(?<!\w)\*([^*\s][^*]*?)\*(?!\w)/g, '<em>$1</em>');
+  text = text.replace(/(?<!\w)_([^_\s][^_]*?)_(?!\w)/g, '<em>$1</em>');
+  
+  // Strikethrough: ~~text~~
+  text = text.replace(/~~([^~]+?)~~/g, '<del>$1</del>');
+  
+  // Links: [text](url)
+  text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  
+  // Highlight/mark: ==text==
+  text = text.replace(/==([^=]+)==/g, '<mark>$1</mark>');
+  
+  return text;
 }
 
 // Show notification
