@@ -107,6 +107,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .catch(error => sendResponse({ success: false, error: error.message }));
     return true;
   }
+  
+  if (request.action === 'explainText') {
+    explainTextSemantics(request.text, request.apiKey)
+      .then(result => sendResponse({ success: true, explanation: result }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
 });
 
 // Ensure content script is injected into the tab
@@ -532,4 +539,114 @@ ${text}`;
     console.error('[Gemini Translator BG] Fetch error:', error);
     throw error;
   }
+}
+
+// Explain text semantics using Gemini API
+async function explainTextSemantics(text, apiKey) {
+  console.log('[Gemini Translator BG] Explaining text semantics...');
+  
+  const models = [
+    'gemini-2.5-flash-lite',
+    'gemini-2.5-flash',
+    'gemini-flash-latest',
+    'gemini-2.0-flash-lite',
+    'gemini-2.0-flash',
+    'gemini-exp-1206'
+  ];
+
+  // Get preferred model from storage
+  let preferredModel = 'gemini-2.5-flash-lite';
+  try {
+    const result = await chrome.storage.sync.get(['preferredModel']);
+    if (result.preferredModel) {
+      preferredModel = result.preferredModel;
+      // Move preferred model to front of list
+      const index = models.indexOf(preferredModel);
+      if (index > 0) {
+        models.splice(index, 1);
+        models.unshift(preferredModel);
+      }
+    }
+  } catch (error) {
+    console.warn('[Gemini Translator BG] Failed to get preferred model:', error);
+  }
+
+  const prompt = `Bạn là chuyên gia ngôn ngữ học. Hãy phân tích và giải thích chi tiết văn bản sau bằng Tiếng Việt:
+
+"${text}"
+
+Vui lòng cung cấp:
+1. **Ý nghĩa tổng quan**: Giải thích ngắn gọn ý chính của văn bản
+2. **Phân tích từ vựng**: Giải thích các từ khóa, thành ngữ, hoặc cụm từ quan trọng
+3. **Ngữ cảnh sử dụng**: Văn bản này thường được dùng trong hoàn cảnh nào
+4. **Sắc thái ngữ nghĩa**: Văn bản mang tính chất gì (trang trọng, thân mật, kỹ thuật, văn học...)
+5. **Lưu ý dịch thuật**: Những điểm cần chú ý khi dịch sang ngôn ngữ khác
+
+Trả lời bằng Tiếng Việt, rõ ràng và dễ hiểu.`;
+
+  let lastError = null;
+
+  for (const modelName of models) {
+    try {
+      console.log(`[Gemini Translator BG] Trying model: ${modelName}`);
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+      
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.7,
+            maxOutputTokens: 2048
+          }
+        })
+      });
+
+      const responseText = await response.text();
+      const errorInfo = parseApiError(responseText, response.status);
+
+      if (errorInfo.isNotFound) {
+        console.log(`[Gemini Translator BG] ⊗ Model ${modelName} not available (404), trying next...`);
+        continue;
+      }
+
+      if (errorInfo.isQuotaExceeded) {
+        const retryDelay = errorInfo.retryDelay || 60;
+        console.log(`[Gemini Translator BG] ⏱ Model ${modelName} quota exceeded, retry in ${retryDelay}s`);
+        lastError = new Error(`Vượt quá quota API. Vui lòng thử lại sau ${retryDelay} giây.`);
+        continue;
+      }
+
+      if (!response.ok) {
+        console.error(`[Gemini Translator BG] ✗ Model ${modelName} error: ${errorInfo.message}`);
+        lastError = new Error(errorInfo.message);
+        continue;
+      }
+
+      const data = JSON.parse(responseText);
+      
+      if (data.candidates && data.candidates.length > 0) {
+        const candidate = data.candidates[0];
+        if (candidate.content && candidate.content.parts && candidate.content.parts.length > 0) {
+          const explanation = candidate.content.parts[0].text;
+          console.log(`[Gemini Translator BG] ✓ Explanation success with model: ${modelName}`);
+          
+          // Update preferred model if different from current
+          if (modelName !== preferredModel) {
+            chrome.storage.sync.set({ preferredModel: modelName });
+          }
+          
+          return explanation;
+        }
+      }
+
+      throw new Error('Invalid response format from API');
+    } catch (error) {
+      console.error(`[Gemini Translator BG] Model ${modelName} failed:`, error.message);
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error('All models failed to generate explanation');
 }

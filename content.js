@@ -774,6 +774,14 @@ function getTextNodes(element) {
 async function handleTranslateSelection(text) {
   if (!text || text.trim().length === 0) return;
 
+  // Store selection range for positioning
+  const selection = window.getSelection();
+  let selectionRect = null;
+  if (selection.rangeCount > 0) {
+    const range = selection.getRangeAt(0);
+    selectionRect = range.getBoundingClientRect();
+  }
+
   showLoadingIndicator();
 
   try {
@@ -793,7 +801,7 @@ async function handleTranslateSelection(text) {
     });
 
     if (response.success) {
-      showTranslationPopup(text, response.translation);
+      showTranslationPopup(text, response.translation, selectionRect);
     } else {
       showNotification('Lỗi: ' + response.error, 'error');
     }
@@ -822,8 +830,8 @@ function restoreOriginalContent() {
   }
 }
 
-// Show translation popup for selected text
-function showTranslationPopup(original, translation) {
+// Show translation popup for selected text with smart positioning
+function showTranslationPopup(original, translation, selectionRect) {
   // Remove existing popup if any
   const existingPopup = document.getElementById('gemini-translator-popup');
   if (existingPopup) existingPopup.remove();
@@ -833,39 +841,249 @@ function showTranslationPopup(original, translation) {
   popup.className = 'gemini-translator-popup';
   popup.innerHTML = `
     <div class="popup-header">
-      <span>Bản dịch</span>
+      <span>📖 Bản dịch</span>
       <button class="popup-close">&times;</button>
     </div>
     <div class="popup-content">
       <div class="original-text">
-        <strong>Gốc:</strong><br>${escapeHtml(original)}
+        <strong>Văn bản gốc:</strong>
+        <div class="text-content">${escapeHtml(original)}</div>
       </div>
       <div class="translated-text">
-        <strong>Tiếng Việt:</strong><br>${escapeHtml(translation)}
+        <strong>🇻🇳 Tiếng Việt:</strong>
+        <div class="text-content">${escapeHtml(translation)}</div>
+      </div>
+      <div class="popup-actions">
+        <button class="action-btn explain-btn" title="Giải thích ngữ nghĩa chi tiết">
+          <span class="btn-icon">💡</span>
+          <span class="btn-text">Giải thích ngữ nghĩa</span>
+        </button>
+        <button class="action-btn copy-btn" title="Sao chép bản dịch">
+          <span class="btn-icon">📋</span>
+          <span class="btn-text">Sao chép</span>
+        </button>
+      </div>
+      <div class="explanation-section" style="display: none;">
+        <strong>📚 Giải thích ngữ nghĩa:</strong>
+        <div class="explanation-content">
+          <div class="explanation-loading">
+            <div class="mini-spinner"></div>
+            <span>Đang phân tích...</span>
+          </div>
+        </div>
       </div>
     </div>
   `;
 
   document.body.appendChild(popup);
 
-  // Position popup near cursor or center of screen
-  const selection = window.getSelection();
-  if (selection.rangeCount > 0) {
-    const range = selection.getRangeAt(0);
-    const rect = range.getBoundingClientRect();
-    popup.style.top = (rect.bottom + window.scrollY + 10) + 'px';
-    popup.style.left = (rect.left + window.scrollX) + 'px';
-  }
+  // Calculate optimal position
+  positionPopupOptimally(popup, selectionRect);
 
-  // Close popup handler
-  popup.querySelector('.popup-close').addEventListener('click', () => {
-    popup.remove();
+  // Event handlers
+  const closeBtn = popup.querySelector('.popup-close');
+  const explainBtn = popup.querySelector('.explain-btn');
+  const copyBtn = popup.querySelector('.copy-btn');
+  const explanationSection = popup.querySelector('.explanation-section');
+
+  // Close handler
+  closeBtn.addEventListener('click', () => {
+    popup.classList.add('popup-closing');
+    setTimeout(() => popup.remove(), 200);
   });
 
-  // Auto close after 10 seconds
+  // Explain handler
+  let explanationLoaded = false;
+  explainBtn.addEventListener('click', async () => {
+    if (!explanationLoaded) {
+      explanationSection.style.display = 'block';
+      await loadSemanticExplanation(original, explanationSection.querySelector('.explanation-content'));
+      explanationLoaded = true;
+      explainBtn.classList.add('active');
+    } else {
+      // Toggle visibility
+      if (explanationSection.style.display === 'none') {
+        explanationSection.style.display = 'block';
+        explainBtn.classList.add('active');
+      } else {
+        explanationSection.style.display = 'none';
+        explainBtn.classList.remove('active');
+      }
+    }
+  });
+
+  // Copy handler
+  copyBtn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(translation);
+      copyBtn.innerHTML = '<span class="btn-icon">✅</span><span class="btn-text">Đã sao chép!</span>';
+      setTimeout(() => {
+        copyBtn.innerHTML = '<span class="btn-icon">📋</span><span class="btn-text">Sao chép</span>';
+      }, 2000);
+    } catch (err) {
+      showNotification('Không thể sao chép', 'error');
+    }
+  });
+
+  // Click outside to close
   setTimeout(() => {
-    if (popup.parentElement) popup.remove();
-  }, 10000);
+    const closeOnClickOutside = (e) => {
+      if (!popup.contains(e.target)) {
+        popup.classList.add('popup-closing');
+        setTimeout(() => popup.remove(), 200);
+        document.removeEventListener('click', closeOnClickOutside);
+      }
+    };
+    document.addEventListener('click', closeOnClickOutside);
+  }, 100);
+
+  // Auto close after 30 seconds
+  setTimeout(() => {
+    if (popup.parentElement) {
+      popup.classList.add('popup-closing');
+      setTimeout(() => popup.remove(), 200);
+    }
+  }, 30000);
+}
+
+// Calculate optimal popup position
+function positionPopupOptimally(popup, selectionRect) {
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  const scrollX = window.scrollX;
+  const scrollY = window.scrollY;
+  
+  // Get popup dimensions (approximate before actual render)
+  popup.style.visibility = 'hidden';
+  popup.style.display = 'block';
+  const popupWidth = popup.offsetWidth;
+  const popupHeight = popup.offsetHeight;
+  popup.style.visibility = '';
+  popup.style.display = '';
+  
+  const margin = 10;
+  let top, left;
+  let positionClass = '';
+
+  if (selectionRect) {
+    // Try positions in order of preference
+    const positions = [
+      // Below selection
+      {
+        top: selectionRect.bottom + scrollY + margin,
+        left: selectionRect.left + scrollX,
+        class: 'position-below'
+      },
+      // Above selection
+      {
+        top: selectionRect.top + scrollY - popupHeight - margin,
+        left: selectionRect.left + scrollX,
+        class: 'position-above'
+      },
+      // Right of selection
+      {
+        top: selectionRect.top + scrollY,
+        left: selectionRect.right + scrollX + margin,
+        class: 'position-right'
+      },
+      // Left of selection
+      {
+        top: selectionRect.top + scrollY,
+        left: selectionRect.left + scrollX - popupWidth - margin,
+        class: 'position-left'
+      }
+    ];
+
+    // Find first position that fits in viewport
+    let bestPosition = null;
+    for (const pos of positions) {
+      const fitsVertically = pos.top >= scrollY && (pos.top + popupHeight) <= (scrollY + viewportHeight);
+      const fitsHorizontally = pos.left >= scrollX && (pos.left + popupWidth) <= (scrollX + viewportWidth);
+      
+      if (fitsVertically && fitsHorizontally) {
+        bestPosition = pos;
+        break;
+      }
+    }
+
+    // Use best position or fallback to center
+    if (bestPosition) {
+      top = bestPosition.top;
+      left = bestPosition.left;
+      positionClass = bestPosition.class;
+    } else {
+      // Fallback: center in viewport
+      top = scrollY + (viewportHeight - popupHeight) / 2;
+      left = scrollX + (viewportWidth - popupWidth) / 2;
+      positionClass = 'position-center';
+    }
+
+    // Ensure popup stays within bounds
+    left = Math.max(scrollX + margin, Math.min(left, scrollX + viewportWidth - popupWidth - margin));
+    top = Math.max(scrollY + margin, Math.min(top, scrollY + viewportHeight - popupHeight - margin));
+  } else {
+    // No selection rect - center in viewport
+    top = scrollY + (viewportHeight - popupHeight) / 2;
+    left = scrollX + (viewportWidth - popupWidth) / 2;
+    positionClass = 'position-center';
+  }
+
+  popup.style.top = top + 'px';
+  popup.style.left = left + 'px';
+  popup.classList.add(positionClass);
+}
+
+// Load semantic explanation
+async function loadSemanticExplanation(text, container) {
+  try {
+    const { apiKey } = await chrome.runtime.sendMessage({ action: 'getApiKey' });
+    
+    if (!apiKey) {
+      container.innerHTML = '<div class="explanation-error">⚠️ Vui lòng cấu hình API key</div>';
+      return;
+    }
+
+    const response = await chrome.runtime.sendMessage({
+      action: 'explainText',
+      text: text,
+      apiKey: apiKey
+    });
+
+    if (response.success) {
+      // Format explanation with nice styling
+      const formattedExplanation = formatExplanation(response.explanation);
+      container.innerHTML = `<div class="explanation-text">${formattedExplanation}</div>`;
+    } else {
+      container.innerHTML = `<div class="explanation-error">❌ Lỗi: ${escapeHtml(response.error)}</div>`;
+    }
+  } catch (error) {
+    container.innerHTML = `<div class="explanation-error">❌ Lỗi: ${escapeHtml(error.message)}</div>`;
+  }
+}
+
+// Format explanation text
+function formatExplanation(text) {
+  // Convert markdown-style formatting to HTML
+  let formatted = escapeHtml(text);
+  
+  // Bold text: **text** or __text__
+  formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+  formatted = formatted.replace(/__(.*?)__/g, '<strong>$1</strong>');
+  
+  // Italic: *text* or _text_
+  formatted = formatted.replace(/\*(.*?)\*/g, '<em>$1</em>');
+  formatted = formatted.replace(/_(.*?)_/g, '<em>$1</em>');
+  
+  // Lists: lines starting with - or •
+  formatted = formatted.replace(/^[\-•]\s+(.+)$/gm, '<li>$1</li>');
+  if (formatted.includes('<li>')) {
+    formatted = formatted.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>');
+  }
+  
+  // Line breaks
+  formatted = formatted.replace(/\n/g, '<br>');
+  
+  return formatted;
 }
 
 // Show notification
