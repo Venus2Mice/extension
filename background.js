@@ -63,7 +63,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'getApiKey') {
     chrome.storage.sync.get(['geminiApiKey', 'preferredModel'], (result) => {
-      sendResponse({ apiKey: result.geminiApiKey || '', preferredModel: result.preferredModel || 'gemini-2.5-flash-lite' });
+      sendResponse({ apiKey: result.geminiApiKey || '', preferredModel: result.preferredModel || 'gemini-2.5-flash' });
     });
     return true; // Keep the message channel open for async response
   }
@@ -218,15 +218,15 @@ async function translateText(text, apiKey, textStyle, currentUrl) {
 
   // Get preferred model from settings
   const settings = await chrome.storage.sync.get(['preferredModel']);
-  const preferredModel = settings.preferredModel || 'gemini-2.5-flash-lite';
+  const preferredModel = settings.preferredModel || 'gemini-2.5-flash';
 
   // List of Gemini models to try (only active models, verified as of Dec 2025)
   // Removed: gemini-1.5-flash-latest, gemini-1.5-flash, gemini-1.5-pro-latest, gemini-pro (404 errors)
   // Note: gemini-3-pro-preview requires paid API and has NO free tier
   // Note: gemini-2.5-pro is the advanced thinking model (paid, stable)
   const allModels = [
-    'gemini-2.5-flash-lite',
     'gemini-2.5-flash',
+    'gemini-2.5-flash-lite',
     'gemini-2.5-pro',           // Paid - advanced thinking model
     'gemini-flash-latest',
     'gemini-2.0-flash-lite',
@@ -312,8 +312,8 @@ async function testAvailableModels(apiKey) {
   console.log('[Gemini Translator BG] Testing available models...');
   
   const allModels = [
-    'gemini-2.5-flash-lite',
     'gemini-2.5-flash',
+    'gemini-2.5-flash-lite',
     'gemini-2.5-pro',           // Paid - advanced thinking model
     'gemini-flash-latest',
     'gemini-2.0-flash-lite',
@@ -356,7 +356,7 @@ async function testAvailableModels(apiKey) {
     success: true,
     availableModels: availableModels,
     modelErrors: modelErrors,
-    workingModel: workingModel || 'gemini-2.5-flash-lite'
+    workingModel: workingModel || 'gemini-2.5-flash'
   };
 }
 
@@ -562,8 +562,8 @@ async function explainTextSemantics(text, apiKey) {
   console.log('[Gemini Translator BG] Explaining text semantics...');
   
   const models = [
-    'gemini-2.5-flash-lite',
     'gemini-2.5-flash',
+    'gemini-2.5-flash-lite',
     'gemini-flash-latest',
     'gemini-2.0-flash-lite',
     'gemini-2.0-flash',
@@ -571,7 +571,7 @@ async function explainTextSemantics(text, apiKey) {
   ];
 
   // Get preferred model from storage
-  let preferredModel = 'gemini-2.5-flash-lite';
+  let preferredModel = 'gemini-2.5-flash';
   try {
     const result = await chrome.storage.sync.get(['preferredModel']);
     if (result.preferredModel) {

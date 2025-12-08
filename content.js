@@ -209,7 +209,7 @@ async function handleTranslatePage() {
     }
     
     console.log('[Gemini Translator] API test successful! Response:', testResponse.translation);
-    const actualModel = testResponse.modelUsed || preferredModel || 'gemini-2.5-flash-lite';
+    const actualModel = testResponse.modelUsed || preferredModel || 'gemini-2.5-flash';
 
     // Save original content
     if (!originalContent) {
@@ -539,7 +539,7 @@ async function handleTranslatePageFull() {
       apiKey: apiKey,
       currentUrl: window.location.href
     });
-    const actualModel = testResponse.modelUsed || preferredModel || 'gemini-2.5-flash-lite';
+    const actualModel = testResponse.modelUsed || preferredModel || 'gemini-2.5-flash';
 
     // Save original content
     if (!originalContent) {
@@ -1447,7 +1447,7 @@ async function startLazyTranslation(textNodes, apiKey, modelName) {
   console.log('[Gemini Translator] Detected text style:', textStyle);
   
   // Show sticky notification with model and writing style
-  showStickyNotification(modelName || 'gemini-2.5-flash-lite', textStyle);
+  showStickyNotification(modelName || 'gemini-2.5-flash', textStyle);
   
   // Mark all nodes as pending
   pendingTranslations = textMap;

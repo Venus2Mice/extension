@@ -15,7 +15,7 @@ const MAX_DOMAINS = 50; // Limit cache size
 async function analyzeDomain(domain, url, apiKey) {
   console.log(`[Domain Analyzer] Analyzing ${domain} using URL: ${url}`);
   
-  const model = 'gemini-2.5-flash-lite';
+  const model = 'gemini-2.5-flash';
   const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
   
   const prompt = `Analyze this website and determine its characteristics for translation purposes:
