@@ -207,6 +207,7 @@ async function testConnection() {
     
     if (result.success) {
       const availableModels = result.availableModels;
+      const modelErrors = result.modelErrors || {};
       const workingModel = result.workingModel;
       
       // Update the select dropdown to show only available models
@@ -216,7 +217,7 @@ async function testConnection() {
       // Store all options
       const allOptions = Array.from(select.options).map(opt => ({
         value: opt.value,
-        text: opt.text
+        text: opt.text.replace(/ [✓✗].*$/, '') // Remove existing markers
       }));
       
       // Clear and repopulate
@@ -230,7 +231,8 @@ async function testConnection() {
           opt.text = option.text + ' ✓';
           opt.style.color = 'green';
         } else {
-          opt.text = option.text + ' ✗';
+          const errorType = modelErrors[option.value] || 'UNKNOWN';
+          opt.text = option.text + ` ✗ (${errorType})`;
           opt.style.color = 'gray';
         }
         

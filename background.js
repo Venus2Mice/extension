@@ -220,16 +220,19 @@ async function translateText(text, apiKey, textStyle, currentUrl) {
   const settings = await chrome.storage.sync.get(['preferredModel']);
   const preferredModel = settings.preferredModel || 'gemini-2.5-flash-lite';
 
-  // List of Gemini models to try (only active models, verified as of Nov 2025)
+  // List of Gemini models to try (only active models, verified as of Dec 2025)
   // Removed: gemini-1.5-flash-latest, gemini-1.5-flash, gemini-1.5-pro-latest, gemini-pro (404 errors)
+  // Note: gemini-3-pro-preview requires paid API and has NO free tier
+  // Note: gemini-2.5-pro is the advanced thinking model (paid, stable)
   const allModels = [
     'gemini-2.5-flash-lite',
     'gemini-2.5-flash',
+    'gemini-2.5-pro',           // Paid - advanced thinking model
     'gemini-flash-latest',
     'gemini-2.0-flash-lite',
     'gemini-2.0-flash',
     'gemini-exp-1206',
-    'gemini-3-pro-preview',
+    'gemini-3-pro-preview',     // Paid only - no free tier
     'gemini-flash-lite-latest',
   ];
   
@@ -311,40 +314,48 @@ async function testAvailableModels(apiKey) {
   const allModels = [
     'gemini-2.5-flash-lite',
     'gemini-2.5-flash',
+    'gemini-2.5-pro',           // Paid - advanced thinking model
     'gemini-flash-latest',
     'gemini-2.0-flash-lite',
     'gemini-2.0-flash',
-    'gemini-exp-1206'
+    'gemini-exp-1206',
+    'gemini-3-pro-preview',     // Paid only - no free tier
   ];
   
   const availableModels = [];
+  const modelErrors = {};
   let workingModel = null;
   
   // Test each model with a simple translation
   for (const model of allModels) {
     try {
       console.log('[Gemini Translator BG] Testing model:', model);
-      await tryTranslate('Hello', apiKey, model, null);
+      await tryTranslate('Hello', apiKey, model, null, null);
       availableModels.push(model);
       if (!workingModel) workingModel = model;
       console.log('[Gemini Translator BG] ✓ Model working:', model);
     } catch (error) {
       const errorInfo = error.apiError || {};
       if (errorInfo.isNotFound) {
-        console.log(`[Gemini Translator BG] ⊗ Model not available: ${model}`);
+        console.log(`[Gemini Translator BG] ⊗ Model not available (404): ${model}`);
+        modelErrors[model] = 'NOT_FOUND';
       } else if (errorInfo.isQuotaExceeded) {
-        console.log(`[Gemini Translator BG] ⚠ Quota exceeded: ${model}`);
+        console.log(`[Gemini Translator BG] ⚠ Quota exceeded (429): ${model}`);
+        modelErrors[model] = 'QUOTA_EXCEEDED';
       } else {
-        console.log(`[Gemini Translator BG] ✗ Model failed: ${model}`);
+        console.log(`[Gemini Translator BG] ✗ Model failed: ${model} - ${error.message}`);
+        modelErrors[model] = errorInfo.status || error.message;
       }
     }
   }
   
   console.log('[Gemini Translator BG] Available models:', availableModels);
+  console.log('[Gemini Translator BG] Model errors:', modelErrors);
   
   return {
     success: true,
     availableModels: availableModels,
+    modelErrors: modelErrors,
     workingModel: workingModel || 'gemini-2.5-flash-lite'
   };
 }
@@ -440,6 +451,10 @@ Rules:
 
 Text to translate:
 ${text}`;
+
+  // Gemini 3 models require temperature=1.0, other models work better with lower temperature
+  const isGemini3Model = model.includes('gemini-3');
+  const temperature = isGemini3Model ? 1.0 : 0.2;
   
   const requestBody = {
     contents: [{
@@ -448,7 +463,7 @@ ${text}`;
       }]
     }],
     generationConfig: {
-      temperature: 0.2,
+      temperature: temperature,
       maxOutputTokens: 8192,
     },
     safetySettings: [
@@ -472,6 +487,7 @@ ${text}`;
   };
   
   console.log('[Gemini Translator BG] Calling API URL:', url.replace(apiKey, 'KEY_HIDDEN'));
+  console.log('[Gemini Translator BG] Using temperature:', temperature, 'for model:', model);
   
   try {
     const response = await fetch(url, {
