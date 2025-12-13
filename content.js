@@ -11,6 +11,9 @@ let isPaused = false;
 let fatalErrorOccurred = false;
 const CONCURRENCY_LIMIT = 10;
 
+// Cache statistics
+let cacheStats = { hits: 0, misses: 0 };
+
 // ============================================================================
 // STREAMING STATE
 // ============================================================================
@@ -64,6 +67,24 @@ const CACHE_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
   }
 })();
 
+// Wait for cache to be loaded (max 2 seconds)
+async function waitForCacheLoaded() {
+  if (cacheLoaded) return;
+
+  const maxWait = 2000;
+  const interval = 50;
+  let waited = 0;
+
+  while (!cacheLoaded && waited < maxWait) {
+    await new Promise(resolve => setTimeout(resolve, interval));
+    waited += interval;
+  }
+
+  if (!cacheLoaded) {
+    console.warn('[Gemini Translator] Cache load timeout, proceeding without cache');
+  }
+}
+
 // Save cache to storage (debounced)
 let saveCacheTimer = null;
 function saveCache() {
@@ -113,36 +134,39 @@ function saveCache() {
   }, 2000);
 }
 
-// Generate cache key from text (optimized for memory)
+// Generate cache key from text (optimized for memory, collision-resistant)
 function getCacheKey(text, textStyle) {
   const styleKey = textStyle ? textStyle.type : 'general';
 
-  // For long text, use hash of first/last parts + length
+  // For long text, use hash of first/middle/last parts + length
+  // This reduces collision risk compared to just first+last
   if (text.length > 200) {
     const firstPart = text.substring(0, 100);
+    const middleStart = Math.floor(text.length / 2) - 50;
+    const middlePart = text.substring(middleStart, middleStart + 100);
     const lastPart = text.substring(text.length - 100);
-    const combined = firstPart + lastPart + styleKey;
+    const combined = firstPart + middlePart + lastPart + styleKey;
 
-    // Simple hash function
-    let hash = 0;
+    // djb2 hash - better distribution than simple hash
+    let hash = 5381;
     for (let i = 0; i < combined.length; i++) {
       const char = combined.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash;
+      hash = ((hash << 5) + hash) ^ char; // hash * 33 XOR char
     }
-    return `${styleKey}_${hash}_${text.length}`;
+    // Convert to unsigned 32-bit and use hex for shorter key
+    return `${styleKey}_${(hash >>> 0).toString(16)}_${text.length}`;
   }
 
-  // For short text, hash entire text
-  let hash = 0;
+  // For short text, hash entire text with djb2
+  let hash = 5381;
   const str = text + styleKey;
   for (let i = 0; i < str.length; i++) {
     const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash;
+    hash = ((hash << 5) + hash) ^ char;
   }
-  return `${styleKey}_${hash}_${text.length}`;
+  return `${styleKey}_${(hash >>> 0).toString(16)}_${text.length}`;
 }
+
 
 // Listen for messages from background script
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -492,15 +516,22 @@ async function handleTranslatePage() {
 
 // Translate text with caching
 async function translateWithCache(text, apiKey, textStyle) {
+  // Ensure cache is loaded before checking
+  await waitForCacheLoaded();
+
   const cacheKey = getCacheKey(text, textStyle);
 
   // Check cache first
   if (translationCache.has(cacheKey)) {
-    console.log('[Gemini Translator] Cache HIT for', text.substring(0, 50));
+    cacheStats.hits++;
+    const ratio = Math.round(cacheStats.hits / (cacheStats.hits + cacheStats.misses) * 100);
+    console.log(`[Gemini Translator] Cache HIT (Rate: ${ratio}% | ${cacheStats.hits}/${cacheStats.hits + cacheStats.misses}) for`, text.substring(0, 50));
     return translationCache.get(cacheKey);
   }
 
-  console.log('[Gemini Translator] Cache MISS, calling API for', text.substring(0, 50));
+  cacheStats.misses++;
+  const ratio = Math.round(cacheStats.hits / (cacheStats.hits + cacheStats.misses) * 100);
+  console.log(`[Gemini Translator] Cache MISS (Rate: ${ratio}% | ${cacheStats.hits}/${cacheStats.hits + cacheStats.misses}), calling API for`, text.substring(0, 50));
 
   // Check if extension context is valid before making API call
   if (!isExtensionContextValid()) {
@@ -1385,10 +1416,12 @@ function restoreOriginalContent() {
 
     document.body.replaceWith(originalContent.cloneNode(true));
     isTranslated = false;
-    translationCache.clear();
+    // NOTE: Keep cache intact for reuse when user translates again
+    // This avoids redundant API calls for the same content
     showNotification('Đã khôi phục nội dung gốc', 'success');
   }
 }
+
 
 // Show translation popup for selected text with smart positioning
 function showTranslationPopup(original, translation, selectionRect) {
