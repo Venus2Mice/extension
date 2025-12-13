@@ -127,12 +127,26 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   // ============================================================================
-  // CONTENT FILTER HANDLERS
+  // SMART CONTENT FILTER HANDLERS
   // ============================================================================
 
   if (request.action === 'checkContentFilter') {
     isContentBlocked(request.url, request.textContent || '')
       .then(result => sendResponse({ success: true, ...result }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+
+  if (request.action === 'allowDomain') {
+    allowDomain(request.domain)
+      .then(() => sendResponse({ success: true }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+
+  if (request.action === 'blockDomainPermanently') {
+    blockDomainPermanently(request.domain)
+      .then(() => sendResponse({ success: true }))
       .catch(error => sendResponse({ success: false, error: error.message }));
     return true;
   }
@@ -154,6 +168,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'getBlockedDomains') {
     getCustomBlockedDomains()
       .then(domains => sendResponse({ success: true, domains }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+
+  if (request.action === 'getFilterStats') {
+    getFilterStats()
+      .then(stats => sendResponse({ success: true, stats }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+
+  if (request.action === 'resetDomainWarning') {
+    resetDomainWarning(request.domain)
+      .then(() => sendResponse({ success: true }))
       .catch(error => sendResponse({ success: false, error: error.message }));
     return true;
   }

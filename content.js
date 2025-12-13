@@ -216,7 +216,7 @@ async function handleTranslatePage() {
     return;
   }
 
-  // Check content filter FIRST
+  // Check content filter FIRST (Smart Filter with warnings)
   try {
     const filterResult = await chrome.runtime.sendMessage({
       action: 'checkContentFilter',
@@ -227,6 +227,26 @@ async function handleTranslatePage() {
       showNotification(`⛔ ${filterResult.reason}`, 'error');
       console.warn('[Gemini Translator] Content blocked:', filterResult.reason);
       return;
+    }
+
+    // Handle warning (not blocked, but needs user confirmation)
+    if (filterResult.warning && filterResult.canContinue) {
+      const userChoice = await showContentWarningDialog(filterResult);
+
+      if (userChoice === 'block') {
+        // User chose to block this domain
+        await chrome.runtime.sendMessage({
+          action: 'blockDomainPermanently',
+          domain: filterResult.domain
+        });
+        showNotification(`🚫 Đã chặn domain: ${filterResult.domain}`, 'info');
+        return;
+      } else if (userChoice === 'cancel') {
+        // User cancelled
+        return;
+      }
+      // userChoice === 'continue' - proceed with translation
+      console.log('[Gemini Translator] User chose to continue despite warning');
     }
   } catch (error) {
     console.error('[Gemini Translator] Content filter check failed:', error);
@@ -574,7 +594,7 @@ async function handleTranslatePageFull() {
     return;
   }
 
-  // Check content filter FIRST
+  // Check content filter FIRST (Smart Filter with warnings)
   try {
     const filterResult = await chrome.runtime.sendMessage({
       action: 'checkContentFilter',
@@ -585,6 +605,23 @@ async function handleTranslatePageFull() {
       showNotification(`⛔ ${filterResult.reason}`, 'error');
       console.warn('[Gemini Translator] Content blocked:', filterResult.reason);
       return;
+    }
+
+    // Handle warning (not blocked, but needs user confirmation)
+    if (filterResult.warning && filterResult.canContinue) {
+      const userChoice = await showContentWarningDialog(filterResult);
+
+      if (userChoice === 'block') {
+        await chrome.runtime.sendMessage({
+          action: 'blockDomainPermanently',
+          domain: filterResult.domain
+        });
+        showNotification(`🚫 Đã chặn domain: ${filterResult.domain}`, 'info');
+        return;
+      } else if (userChoice === 'cancel') {
+        return;
+      }
+      console.log('[Gemini Translator] User chose to continue despite warning');
     }
   } catch (error) {
     console.error('[Gemini Translator] Content filter check failed:', error);
@@ -907,7 +944,7 @@ async function handleTranslatePageStreaming() {
     return;
   }
 
-  // Check content filter FIRST
+  // Check content filter FIRST (Smart Filter with warnings)
   try {
     const filterResult = await chrome.runtime.sendMessage({
       action: 'checkContentFilter',
@@ -918,6 +955,23 @@ async function handleTranslatePageStreaming() {
       showNotification(`⛔ ${filterResult.reason}`, 'error');
       console.warn('[Gemini Translator] Content blocked:', filterResult.reason);
       return;
+    }
+
+    // Handle warning (not blocked, but needs user confirmation)
+    if (filterResult.warning && filterResult.canContinue) {
+      const userChoice = await showContentWarningDialog(filterResult);
+
+      if (userChoice === 'block') {
+        await chrome.runtime.sendMessage({
+          action: 'blockDomainPermanently',
+          domain: filterResult.domain
+        });
+        showNotification(`🚫 Đã chặn domain: ${filterResult.domain}`, 'info');
+        return;
+      } else if (userChoice === 'cancel') {
+        return;
+      }
+      console.log('[Gemini Translator] User chose to continue despite warning');
     }
   } catch (error) {
     console.error('[Gemini Translator] Content filter check failed:', error);
@@ -1831,6 +1885,195 @@ function processInlineFormatting(text) {
   text = text.replace(/==([^=]+)==/g, '<mark>$1</mark>');
 
   return text;
+}
+
+/**
+ * Show content warning dialog with user options
+ * @param {Object} filterResult - Result from content filter
+ * @returns {Promise<string>} User choice: 'continue', 'block', or 'cancel'
+ */
+function showContentWarningDialog(filterResult) {
+  return new Promise((resolve) => {
+    // Create overlay
+    const overlay = document.createElement('div');
+    overlay.className = 'gemini-warning-overlay';
+    overlay.innerHTML = `
+      <div class="gemini-warning-dialog">
+        <div class="warning-header">
+          <span class="warning-icon">⚠️</span>
+          <h3>Cảnh báo Nội dung</h3>
+        </div>
+        <div class="warning-body">
+          <p class="warning-reason">${filterResult.reason}</p>
+          <p class="warning-message">${filterResult.message || ''}</p>
+          <p class="warning-domain">Domain: <strong>${filterResult.domain}</strong></p>
+          ${filterResult.warningCount ? `<p class="warning-count">Cảnh báo: ${filterResult.warningCount}/3</p>` : ''}
+        </div>
+        <div class="warning-actions">
+          <button class="warning-btn btn-continue" title="Tiếp tục dịch trang này">
+            ✅ Tiếp tục dịch
+          </button>
+          <button class="warning-btn btn-block" title="Chặn vĩnh viễn domain này">
+            🚫 Chặn domain
+          </button>
+          <button class="warning-btn btn-cancel" title="Hủy và không dịch">
+            ❌ Hủy
+          </button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    // Add styles if not exists
+    if (!document.getElementById('gemini-warning-styles')) {
+      const style = document.createElement('style');
+      style.id = 'gemini-warning-styles';
+      style.textContent = `
+        .gemini-warning-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background: rgba(0, 0, 0, 0.7);
+          z-index: 9999999;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          animation: fadeIn 0.2s ease;
+        }
+        @keyframes fadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+        .gemini-warning-dialog {
+          background: white;
+          border-radius: 16px;
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+          max-width: 450px;
+          width: 90%;
+          overflow: hidden;
+          animation: slideIn 0.3s ease;
+        }
+        @keyframes slideIn {
+          from { transform: translateY(-20px); opacity: 0; }
+          to { transform: translateY(0); opacity: 1; }
+        }
+        .warning-header {
+          background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+          color: white;
+          padding: 16px 20px;
+          display: flex;
+          align-items: center;
+          gap: 12px;
+        }
+        .warning-icon { font-size: 28px; }
+        .warning-header h3 { margin: 0; font-size: 18px; }
+        .warning-body {
+          padding: 20px;
+          color: #333;
+        }
+        .warning-reason {
+          font-size: 15px;
+          font-weight: 500;
+          color: #d97706;
+          margin: 0 0 12px 0;
+        }
+        .warning-message {
+          font-size: 14px;
+          color: #666;
+          margin: 0 0 12px 0;
+        }
+        .warning-domain {
+          font-size: 13px;
+          color: #888;
+          margin: 0;
+        }
+        .warning-count {
+          font-size: 13px;
+          color: #ef4444;
+          margin: 8px 0 0 0;
+          font-weight: 500;
+        }
+        .warning-actions {
+          display: flex;
+          gap: 8px;
+          padding: 16px 20px;
+          background: #f9fafb;
+          border-top: 1px solid #e5e7eb;
+        }
+        .warning-btn {
+          flex: 1;
+          padding: 10px 16px;
+          border: none;
+          border-radius: 8px;
+          font-size: 13px;
+          font-weight: 500;
+          cursor: pointer;
+          transition: all 0.2s ease;
+        }
+        .btn-continue {
+          background: #10b981;
+          color: white;
+        }
+        .btn-continue:hover { background: #059669; }
+        .btn-block {
+          background: #ef4444;
+          color: white;
+        }
+        .btn-block:hover { background: #dc2626; }
+        .btn-cancel {
+          background: #6b7280;
+          color: white;
+        }
+        .btn-cancel:hover { background: #4b5563; }
+      `;
+      document.head.appendChild(style);
+    }
+
+    // Event handlers
+    const continueBtn = overlay.querySelector('.btn-continue');
+    const blockBtn = overlay.querySelector('.btn-block');
+    const cancelBtn = overlay.querySelector('.btn-cancel');
+
+    const cleanup = () => {
+      overlay.remove();
+    };
+
+    continueBtn.addEventListener('click', () => {
+      cleanup();
+      resolve('continue');
+    });
+
+    blockBtn.addEventListener('click', () => {
+      cleanup();
+      resolve('block');
+    });
+
+    cancelBtn.addEventListener('click', () => {
+      cleanup();
+      resolve('cancel');
+    });
+
+    // Close on overlay click
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) {
+        cleanup();
+        resolve('cancel');
+      }
+    });
+
+    // Close on Escape
+    const escHandler = (e) => {
+      if (e.key === 'Escape') {
+        cleanup();
+        document.removeEventListener('keydown', escHandler);
+        resolve('cancel');
+      }
+    };
+    document.addEventListener('keydown', escHandler);
+  });
 }
 
 // Show notification

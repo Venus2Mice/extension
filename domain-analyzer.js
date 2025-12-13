@@ -6,191 +6,374 @@ const DOMAIN_CACHE_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
 const MAX_DOMAINS = 50; // Limit cache size
 
 // ============================================================================
-// CONTENT FILTER - Block prohibited content
+// SMART CONTENT FILTER - Intelligent detection with warning system
 // ============================================================================
 
-// Blocked domain patterns (explicit adult/illegal sites)
-const BLOCKED_DOMAIN_PATTERNS = [
-  /porn/i, /xxx/i, /xnxx/i, /xvideos/i, /xhamster/i, /pornhub/i,
-  /redtube/i, /youporn/i, /tube8/i, /spankbang/i, /brazzers/i,
-  /sex/i, /hentai/i, /nsfw/i, /adult/i, /18\+/i,
-  /nazi/i, /fascis/i, /whitesuprem/i, /neonazi/i,
-  /gore/i, /snuff/i, /darkweb/i, /darknet/i
+const CONTENT_FILTER_KEY = 'contentFilterData';
+
+// CRITICAL: Always block (explicit illegal content)
+const CRITICAL_DOMAIN_PATTERNS = [
+  /\b(pornhub|xvideos|xhamster|xnxx|redtube|youporn)\b/i,
+  /\b(brazzers|bangbros|realitykings)\b/i,
+  /\bchild(porn|abuse)\b/i,
+  /\b(darkweb|darknet)market\b/i
 ];
 
-// Blocked keywords in URL path or text content
-const BLOCKED_KEYWORDS = [
-  // Adult content
-  'porn', 'xxx', 'sex', 'hentai', 'nsfw', 'nude', 'naked', 'erotic',
-  'adult-only', 'fetish', 'camgirl', 'onlyfans', 'escort',
-  // Extremism
-  'nazi', 'fascist', 'white-supremacy', 'neo-nazi', 'hitler', 'swastika',
-  'holocaust-denial', 'ethnic-cleansing', 'genocide-support',
-  // Violence
-  'gore', 'snuff', 'torture', 'terrorism', 'bomb-making',
-  // Illegal
-  'drug-sale', 'weapon-sale', 'human-trafficking', 'child-abuse'
+// HIGH SEVERITY: Block after warning
+const HIGH_SEVERITY_PATTERNS = [
+  /\bporn\b/i, /\bxxx\b/i, /\bhentai\b/i,
+  /\bneonazi\b/i, /\bwhitesupremac/i
 ];
 
-// Safe categories that should never be blocked
+// MEDIUM SEVERITY: Contextual - may be legitimate (news, education)
+const MEDIUM_SEVERITY_KEYWORDS = [
+  'nazi', 'fascist', 'terrorism', 'war', 'military', 'weapon',
+  'violence', 'killing', 'death', 'murder', 'drug', 'bomb'
+];
+
+// WHITELIST: Trusted categories that should never be blocked
+const WHITELISTED_DOMAINS = [
+  // News
+  /\b(bbc|cnn|reuters|nytimes|washingtonpost|theguardian|foxnews)\b/i,
+  /\b(vnexpress|dantri|tuoitre|thanhnien|vietnamnet|vtv|vov)\b/i,
+  /\b(nhk|rt|aljazeera|france24|dw)\b/i,
+  // Education
+  /\b(wikipedia|wikimedia|britannica|edu|university|college)\b/i,
+  /\b(coursera|udemy|edx|khan.*academy)\b/i,
+  // Government/Official
+  /\b(\.gov|\.edu|\.mil|\.org)\b/i,
+  // Research
+  /\b(arxiv|pubmed|scholar\.google|researchgate|jstor)\b/i,
+  // Documentation
+  /\b(github|stackoverflow|mdn|docs\.)\b/i
+];
+
+// Safe content categories (from domain analysis)
 const SAFE_CATEGORIES = [
-  'news', 'education', 'academic', 'documentation', 'government',
-  'wikipedia', 'encyclopedia', 'dictionary', 'reference'
+  'news', 'journalism', 'education', 'academic', 'research',
+  'government', 'military-news', 'history', 'documentation',
+  'encyclopedia', 'reference', 'legal', 'medical', 'science'
 ];
 
 /**
- * Check if a URL/domain should be blocked from translation
- * @param {string} url - Full URL to check
- * @returns {Object} { blocked: boolean, reason: string }
+ * Get content filter data from storage
  */
-function checkContentFilter(url) {
+async function getContentFilterData() {
   try {
-    const urlObj = new URL(url);
-    const domain = urlObj.hostname.toLowerCase();
-    const fullPath = (urlObj.pathname + urlObj.search).toLowerCase();
-
-    // Check blocked domain patterns
-    for (const pattern of BLOCKED_DOMAIN_PATTERNS) {
-      if (pattern.test(domain)) {
-        return {
-          blocked: true,
-          reason: `Domain bị chặn: ${domain} (nội dung cấm)`,
-          category: 'domain_blocked'
-        };
-      }
-    }
-
-    // Check blocked keywords in URL
-    for (const keyword of BLOCKED_KEYWORDS) {
-      if (domain.includes(keyword) || fullPath.includes(keyword)) {
-        return {
-          blocked: true,
-          reason: `URL chứa từ khóa bị chặn: "${keyword}"`,
-          category: 'keyword_blocked'
-        };
-      }
-    }
-
-    return { blocked: false, reason: null, category: null };
-
+    const result = await chrome.storage.local.get([CONTENT_FILTER_KEY]);
+    return result[CONTENT_FILTER_KEY] || {
+      warningHistory: {},    // { domain: { count, lastWarning, reasons } }
+      blockedDomains: [],    // Permanently blocked after repeated violations
+      allowedDomains: [],    // User explicitly allowed despite warning
+      customBlocked: []      // User manually blocked
+    };
   } catch (error) {
-    console.error('[Content Filter] Error checking URL:', error);
-    return { blocked: false, reason: null, category: null };
+    return { warningHistory: {}, blockedDomains: [], allowedDomains: [], customBlocked: [] };
   }
 }
 
 /**
- * Check if page content contains prohibited material
- * This is a lightweight check on visible text
- * @param {string} textContent - Text content from the page
- * @returns {Object} { blocked: boolean, reason: string }
+ * Save content filter data
  */
-function checkTextContent(textContent) {
-  if (!textContent || textContent.length < 100) {
-    return { blocked: false, reason: null };
+async function saveContentFilterData(data) {
+  try {
+    await chrome.storage.local.set({ [CONTENT_FILTER_KEY]: data });
+  } catch (error) {
+    console.error('[Smart Filter] Error saving data:', error);
+  }
+}
+
+/**
+ * Check if domain is whitelisted (trusted sources)
+ */
+function isDomainWhitelisted(domain) {
+  for (const pattern of WHITELISTED_DOMAINS) {
+    if (pattern.test(domain)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Check if domain profile indicates safe category
+ */
+async function isDomainSafeCategory(domain) {
+  try {
+    const result = await chrome.storage.local.get([DOMAIN_CACHE_KEY]);
+    const cache = result[DOMAIN_CACHE_KEY] || {};
+    const profile = cache[domain];
+
+    if (profile && profile.websiteType) {
+      const type = profile.websiteType.toLowerCase();
+      return SAFE_CATEGORIES.some(cat => type.includes(cat));
+    }
+    return false;
+  } catch (error) {
+    return false;
+  }
+}
+
+/**
+ * Smart content filter with severity levels and warning system
+ * @param {string} url - URL to check
+ * @param {string} textContent - Optional page content for deeper analysis
+ * @returns {Promise<Object>} Filter result
+ */
+async function isContentBlocked(url, textContent = '') {
+  const domain = extractDomain(url);
+  if (!domain) return { blocked: false };
+
+  const filterData = await getContentFilterData();
+
+  // 1. Check if user explicitly allowed this domain
+  if (filterData.allowedDomains.includes(domain)) {
+    console.log(`[Smart Filter] Domain explicitly allowed: ${domain}`);
+    return { blocked: false, allowed: true };
   }
 
-  const lowerText = textContent.toLowerCase().substring(0, 5000); // Check first 5000 chars
+  // 2. Check if permanently blocked (repeated violations)
+  if (filterData.blockedDomains.includes(domain)) {
+    return {
+      blocked: true,
+      reason: `Domain đã bị chặn vĩnh viễn do vi phạm nhiều lần: ${domain}`,
+      category: 'permanent_block',
+      canAppeal: false
+    };
+  }
 
-  // Critical keywords that indicate prohibited content
-  const criticalPatterns = [
-    /\b(nazi|fascist|white\s*supremac|neo-?nazi)\b/i,
-    /\b(swastika|holocaust\s*denial|ethnic\s*cleansing)\b/i,
-    /\b(child\s*porn|pedophil|csam)\b/i,
-    /\b(terrorism|bomb\s*making|weapon\s*instruction)\b/i
-  ];
+  // 3. Check user's custom blocked list
+  if (filterData.customBlocked.includes(domain)) {
+    return {
+      blocked: true,
+      reason: `Domain trong danh sách chặn của bạn: ${domain}`,
+      category: 'custom_blocked',
+      canAppeal: true
+    };
+  }
 
-  for (const pattern of criticalPatterns) {
-    if (pattern.test(lowerText)) {
+  // 4. Check CRITICAL patterns (always block, no warning)
+  for (const pattern of CRITICAL_DOMAIN_PATTERNS) {
+    if (pattern.test(domain) || pattern.test(url)) {
+      // Auto-add to permanent block
+      filterData.blockedDomains.push(domain);
+      await saveContentFilterData(filterData);
+
       return {
         blocked: true,
-        reason: 'Phát hiện nội dung cấm trong trang',
-        category: 'content_blocked'
+        reason: `Nội dung bị cấm hoàn toàn: ${domain}`,
+        category: 'critical_blocked',
+        canAppeal: false
       };
     }
   }
 
-  return { blocked: false, reason: null };
-}
-
-/**
- * Get user's custom blocked domains from storage
- */
-async function getCustomBlockedDomains() {
-  try {
-    const result = await chrome.storage.sync.get(['customBlockedDomains']);
-    return result.customBlockedDomains || [];
-  } catch (error) {
-    return [];
+  // 5. Check if whitelisted (skip further checks)
+  if (isDomainWhitelisted(domain)) {
+    console.log(`[Smart Filter] Trusted domain: ${domain}`);
+    return { blocked: false, trusted: true };
   }
-}
 
-/**
- * Add a domain to custom blocked list
- */
-async function addCustomBlockedDomain(domain) {
-  try {
-    const current = await getCustomBlockedDomains();
-    if (!current.includes(domain)) {
-      current.push(domain);
-      await chrome.storage.sync.set({ customBlockedDomains: current });
-      console.log(`[Content Filter] Added ${domain} to blocked list`);
-      return true;
+  // 6. Check if domain has safe category from analysis
+  const isSafe = await isDomainSafeCategory(domain);
+  if (isSafe) {
+    console.log(`[Smart Filter] Safe category domain: ${domain}`);
+    return { blocked: false, safeCategory: true };
+  }
+
+  // 7. Check HIGH severity patterns
+  for (const pattern of HIGH_SEVERITY_PATTERNS) {
+    if (pattern.test(domain) || pattern.test(url)) {
+      return await handleWarning(domain, filterData, 'high',
+        `Domain có dấu hiệu nội dung không phù hợp`);
     }
-    return false;
-  } catch (error) {
-    console.error('[Content Filter] Error adding blocked domain:', error);
-    return false;
   }
-}
 
-/**
- * Remove a domain from custom blocked list
- */
-async function removeCustomBlockedDomain(domain) {
-  try {
-    const current = await getCustomBlockedDomains();
-    const index = current.indexOf(domain);
-    if (index > -1) {
-      current.splice(index, 1);
-      await chrome.storage.sync.set({ customBlockedDomains: current });
-      console.log(`[Content Filter] Removed ${domain} from blocked list`);
-      return true;
+  // 8. Check MEDIUM severity in URL (contextual)
+  const urlLower = url.toLowerCase();
+  for (const keyword of MEDIUM_SEVERITY_KEYWORDS) {
+    if (urlLower.includes(keyword)) {
+      // Only warn for medium severity, don't auto-block
+      const warning = filterData.warningHistory[domain];
+      if (warning && warning.count >= 3) {
+        return await handleWarning(domain, filterData, 'medium',
+          `URL chứa từ khóa nhạy cảm: "${keyword}"`);
+      }
+      // First time - just log and allow
+      console.log(`[Smart Filter] Medium keyword detected but allowing: ${keyword} in ${domain}`);
+      return { blocked: false, warning: `Phát hiện từ khóa: ${keyword}`, severity: 'low' };
     }
-    return false;
-  } catch (error) {
-    console.error('[Content Filter] Error removing blocked domain:', error);
-    return false;
   }
+
+  return { blocked: false };
 }
 
 /**
- * Full content filter check including custom domains
+ * Handle warning and escalation logic
  */
-async function isContentBlocked(url, textContent = '') {
-  // Check URL/domain first
-  const urlCheck = checkContentFilter(url);
-  if (urlCheck.blocked) return urlCheck;
+async function handleWarning(domain, filterData, severity, reason) {
+  const now = Date.now();
+  let warning = filterData.warningHistory[domain];
 
-  // Check custom blocked domains
-  const domain = extractDomain(url);
-  const customBlocked = await getCustomBlockedDomains();
-  if (customBlocked.includes(domain)) {
+  if (!warning) {
+    // First warning
+    warning = { count: 1, lastWarning: now, reasons: [reason], severity };
+    filterData.warningHistory[domain] = warning;
+    await saveContentFilterData(filterData);
+
     return {
-      blocked: true,
-      reason: `Domain trong danh sách chặn của bạn: ${domain}`,
-      category: 'custom_blocked'
+      blocked: false,
+      warning: true,
+      firstWarning: true,
+      reason: `⚠️ CẢNH BÁO: ${reason}`,
+      message: `Đây là lần đầu phát hiện nội dung nhạy cảm trên ${domain}. Tiếp tục?`,
+      domain: domain,
+      canContinue: true,
+      canBlock: true
     };
   }
 
-  // Check text content if provided
-  if (textContent) {
-    const textCheck = checkTextContent(textContent);
-    if (textCheck.blocked) return textCheck;
+  // Subsequent access
+  warning.count++;
+  warning.lastWarning = now;
+  if (!warning.reasons.includes(reason)) {
+    warning.reasons.push(reason);
   }
 
-  return { blocked: false, reason: null, category: null };
+  // After 3 warnings, permanently block
+  if (warning.count >= 3) {
+    filterData.blockedDomains.push(domain);
+    delete filterData.warningHistory[domain];
+    await saveContentFilterData(filterData);
+
+    return {
+      blocked: true,
+      reason: `Domain bị chặn sau ${warning.count} lần cảnh báo: ${domain}`,
+      category: 'escalated_block',
+      canAppeal: true
+    };
+  }
+
+  // Warning but allow (2nd time)
+  await saveContentFilterData(filterData);
+
+  return {
+    blocked: false,
+    warning: true,
+    warningCount: warning.count,
+    reason: `⚠️ Cảnh báo lần ${warning.count}/3: ${reason}`,
+    message: `Còn ${3 - warning.count} lần cảnh báo trước khi bị chặn vĩnh viễn.`,
+    domain: domain,
+    canContinue: true,
+    canBlock: true
+  };
 }
+
+/**
+ * Allow a domain (user chooses to continue despite warning)
+ */
+async function allowDomain(domain) {
+  const filterData = await getContentFilterData();
+
+  if (!filterData.allowedDomains.includes(domain)) {
+    filterData.allowedDomains.push(domain);
+    // Remove from warning history
+    delete filterData.warningHistory[domain];
+    await saveContentFilterData(filterData);
+    console.log(`[Smart Filter] User allowed domain: ${domain}`);
+  }
+  return true;
+}
+
+/**
+ * Block a domain permanently (user choice)
+ */
+async function blockDomainPermanently(domain) {
+  const filterData = await getContentFilterData();
+
+  if (!filterData.blockedDomains.includes(domain)) {
+    filterData.blockedDomains.push(domain);
+  }
+  // Remove from allowed if was there
+  const allowedIdx = filterData.allowedDomains.indexOf(domain);
+  if (allowedIdx > -1) filterData.allowedDomains.splice(allowedIdx, 1);
+
+  await saveContentFilterData(filterData);
+  console.log(`[Smart Filter] User blocked domain permanently: ${domain}`);
+  return true;
+}
+
+/**
+ * Add to custom blocked list
+ */
+async function addCustomBlockedDomain(domain) {
+  const filterData = await getContentFilterData();
+  if (!filterData.customBlocked.includes(domain)) {
+    filterData.customBlocked.push(domain);
+    await saveContentFilterData(filterData);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Remove from custom blocked list
+ */
+async function removeCustomBlockedDomain(domain) {
+  const filterData = await getContentFilterData();
+  const idx = filterData.customBlocked.indexOf(domain);
+  if (idx > -1) {
+    filterData.customBlocked.splice(idx, 1);
+    await saveContentFilterData(filterData);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Get all blocked domains
+ */
+async function getCustomBlockedDomains() {
+  const filterData = await getContentFilterData();
+  return [...filterData.blockedDomains, ...filterData.customBlocked];
+}
+
+/**
+ * Get filter statistics
+ */
+async function getFilterStats() {
+  const filterData = await getContentFilterData();
+  return {
+    permanentlyBlocked: filterData.blockedDomains.length,
+    customBlocked: filterData.customBlocked.length,
+    allowed: filterData.allowedDomains.length,
+    warnings: Object.keys(filterData.warningHistory).length,
+    warningDetails: Object.entries(filterData.warningHistory).map(([domain, data]) => ({
+      domain,
+      count: data.count,
+      severity: data.severity
+    }))
+  };
+}
+
+/**
+ * Reset warning for a domain
+ */
+async function resetDomainWarning(domain) {
+  const filterData = await getContentFilterData();
+
+  // Remove from blocked
+  const blockedIdx = filterData.blockedDomains.indexOf(domain);
+  if (blockedIdx > -1) filterData.blockedDomains.splice(blockedIdx, 1);
+
+  // Remove from warning history
+  delete filterData.warningHistory[domain];
+
+  await saveContentFilterData(filterData);
+  console.log(`[Smart Filter] Reset warnings for: ${domain}`);
+  return true;
+}
+
 
 /**
  * Analyze a domain using Gemini with Google Search + URL Context tools
