@@ -24,6 +24,7 @@
     opacity: 0;
     transform: scale(0.9) translateY(-10px);
   }
+
   to {
     opacity: 1;
     transform: scale(1) translateY(0);
@@ -35,6 +36,7 @@
     opacity: 1;
     transform: scale(1) translateY(0);
   }
+
   to {
     opacity: 0;
     transform: scale(0.95) translateY(-5px);
@@ -176,6 +178,7 @@
     max-height: 0;
     padding: 0 14px;
   }
+
   to {
     opacity: 1;
     max-height: 1000px;
@@ -569,6 +572,36 @@
   text-align: center;
 }
 
+.progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.pause-btn {
+  background: none;
+  border: 2px solid #667eea;
+  color: #667eea;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  padding: 0;
+  line-height: 1;
+}
+
+.pause-btn:hover {
+  background: #667eea;
+  color: white;
+  transform: scale(1.1);
+}
+
 /* Sticky Notification for Model and Writing Style */
 .gemini-translator-sticky-notification {
   position: fixed;
@@ -658,4 +691,139 @@
   padding: 2px 8px;
   border-radius: 4px;
   flex: 1;
+}
+
+/* ============================================================================
+   STREAMING INDICATOR
+   ============================================================================ */
+
+.gemini-streaming-indicator {
+  position: fixed;
+  bottom: 20px;
+  left: 20px;
+  z-index: 999998;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  border-radius: 12px;
+  padding: 14px 20px;
+  box-shadow: 0 8px 32px rgba(16, 185, 129, 0.35);
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  display: none;
+  animation: streamingPulse 2s ease-in-out infinite;
+}
+
+@keyframes streamingPulse {
+
+  0%,
+  100% {
+    box-shadow: 0 8px 32px rgba(16, 185, 129, 0.35);
+  }
+
+  50% {
+    box-shadow: 0 8px 48px rgba(16, 185, 129, 0.55);
+  }
+}
+
+.streaming-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.streaming-icon {
+  font-size: 24px;
+  animation: streamingBolt 0.6s ease-in-out infinite;
+}
+
+@keyframes streamingBolt {
+
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+
+  50% {
+    transform: translateY(-3px);
+    opacity: 0.7;
+  }
+}
+
+.streaming-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.streaming-label {
+  color: white;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.streaming-delta {
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 12px;
+  max-width: 250px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'Consolas', 'Monaco', monospace;
+}
+
+/* Streaming active highlight effect */
+.gemini-streaming-active {
+  background: linear-gradient(90deg,
+      rgba(16, 185, 129, 0.15) 0%,
+      rgba(16, 185, 129, 0.05) 50%,
+      transparent 100%) !important;
+  border-radius: 3px;
+  animation: streamingHighlight 0.5s ease-out;
+}
+
+@keyframes streamingHighlight {
+  0% {
+    background: rgba(16, 185, 129, 0.4);
+  }
+
+  100% {
+    background: transparent;
+  }
+}
+
+/* ============================================================================
+   FEEDBACK BUTTONS (Self-Learning)
+   ============================================================================ */
+
+.gemini-translator-popup .feedback-btn {
+  width: 32px;
+  height: 32px;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  background: white;
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gemini-translator-popup .feedback-btn:hover:not(:disabled) {
+  transform: scale(1.1);
+}
+
+.gemini-translator-popup .feedback-btn.thumbs-up:hover:not(:disabled) {
+  background: #dcfce7;
+  border-color: #22c55e;
+}
+
+.gemini-translator-popup .feedback-btn.thumbs-down:hover:not(:disabled) {
+  background: #fee2e2;
+  border-color: #ef4444;
+}
+
+.gemini-translator-popup .feedback-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
 }
