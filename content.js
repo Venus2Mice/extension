@@ -184,21 +184,23 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   // ============================================================================
   // STREAMING MESSAGE HANDLERS
+  // These are fire-and-forget messages from background, no response needed
   // ============================================================================
 
   if (request.action === 'streamChunk') {
     handleStreamChunk(request.chunkIndex, request.partialText, request.delta);
-    return true;
+    // No sendResponse needed - this is a one-way message from background
+    return false;
   }
 
   if (request.action === 'streamComplete') {
     handleStreamComplete(request.chunkIndex, request.translation, request.modelUsed);
-    return true;
+    return false;
   }
 
   if (request.action === 'streamError') {
     handleStreamError(request.chunkIndex, request.error);
-    return true;
+    return false;
   }
 
   return true;
