@@ -7,6 +7,9 @@ let pendingTranslations = [];
 let scrollObserver = null;
 let translationInProgress = false;
 let cacheLoaded = false;
+let isPaused = false;
+let fatalErrorOccurred = false;
+const CONCURRENCY_LIMIT = 10;
 
 // Helper: Check if extension context is valid
 function isExtensionContextValid() {
@@ -30,11 +33,11 @@ const CACHE_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
       cacheLoaded = true;
       return;
     }
-    
+
     const result = await chrome.storage.local.get(['translationCache', 'cacheTimestamp']);
     if (result.translationCache) {
       const cacheAge = Date.now() - (result.cacheTimestamp || 0);
-      
+
       // Clear old cache if expired
       if (cacheAge > CACHE_MAX_AGE) {
         console.log('[Gemini Translator] Cache expired, clearing...');
@@ -42,7 +45,7 @@ const CACHE_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
         translationCache = new Map();
       } else {
         translationCache = new Map(Object.entries(result.translationCache));
-        console.log(`[Gemini Translator] Loaded ${translationCache.size} cached translations (age: ${Math.round(cacheAge / (24*60*60*1000))} days)`);
+        console.log(`[Gemini Translator] Loaded ${translationCache.size} cached translations (age: ${Math.round(cacheAge / (24 * 60 * 60 * 1000))} days)`);
       }
     }
     cacheLoaded = true;
@@ -62,7 +65,7 @@ function saveCache() {
       console.warn('[Gemini Translator] Extension context invalidated, skipping cache save');
       return;
     }
-    
+
     try {
       // Limit cache size - keep most recent entries
       if (translationCache.size > CACHE_MAX_SIZE) {
@@ -71,9 +74,9 @@ function saveCache() {
         const trimmed = entries.slice(-CACHE_MAX_SIZE); // Keep last N entries
         translationCache = new Map(trimmed);
       }
-      
+
       const cacheObj = Object.fromEntries(translationCache);
-      await chrome.storage.local.set({ 
+      await chrome.storage.local.set({
         translationCache: cacheObj,
         cacheTimestamp: Date.now()
       });
@@ -84,9 +87,9 @@ function saveCache() {
         console.warn('[Gemini Translator] Cannot save cache: extension reloaded');
         return;
       }
-      
+
       console.error('[Gemini Translator] Failed to save cache:', error);
-      
+
       // If storage quota exceeded, clear old cache
       if (error.message && error.message.includes('QUOTA')) {
         console.log('[Gemini Translator] Storage quota exceeded, clearing cache...');
@@ -104,13 +107,13 @@ function saveCache() {
 // Generate cache key from text (optimized for memory)
 function getCacheKey(text, textStyle) {
   const styleKey = textStyle ? textStyle.type : 'general';
-  
+
   // For long text, use hash of first/last parts + length
   if (text.length > 200) {
     const firstPart = text.substring(0, 100);
     const lastPart = text.substring(text.length - 100);
     const combined = firstPart + lastPart + styleKey;
-    
+
     // Simple hash function
     let hash = 0;
     for (let i = 0; i < combined.length; i++) {
@@ -120,7 +123,7 @@ function getCacheKey(text, textStyle) {
     }
     return `${styleKey}_${hash}_${text.length}`;
   }
-  
+
   // For short text, hash entire text
   let hash = 0;
   const str = text + styleKey;
@@ -138,14 +141,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     sendResponse({ status: 'ready' });
     return true;
   }
-  
+
   if (request.action === 'clearCache') {
     translationCache.clear();
     console.log('[Gemini Translator] In-memory cache cleared');
     sendResponse({ status: 'ok' });
     return true;
   }
-  
+
   if (request.action === 'translatePage') {
     handleTranslatePage();
     sendResponse({ status: 'started' });
@@ -170,7 +173,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 // Handle page translation
 async function handleTranslatePage() {
   console.log('[Gemini Translator] Starting page translation...');
-  
+
   if (isTranslated) {
     console.log('[Gemini Translator] Page already translated, restoring original...');
     restoreOriginalContent();
@@ -185,7 +188,7 @@ async function handleTranslatePage() {
     const { apiKey, preferredModel } = await chrome.runtime.sendMessage({ action: 'getApiKey' });
     console.log('[Gemini Translator] API key received:', apiKey ? 'Yes (length: ' + apiKey.length + ')' : 'No');
     console.log('[Gemini Translator] Preferred model:', preferredModel);
-    
+
     if (!apiKey) {
       showNotification('Vui lòng cấu hình Gemini API key trong popup extension', 'error');
       hideLoadingIndicator();
@@ -200,14 +203,14 @@ async function handleTranslatePage() {
       apiKey: apiKey,
       currentUrl: window.location.href
     });
-    
+
     if (!testResponse.success) {
       console.error('[Gemini Translator] API test failed:', testResponse.error);
       showNotification('Lỗi API: ' + testResponse.error, 'error');
       hideLoadingIndicator();
       return;
     }
-    
+
     console.log('[Gemini Translator] API test successful! Response:', testResponse.translation);
     const actualModel = testResponse.modelUsed || preferredModel || 'gemini-2.5-flash';
 
@@ -221,52 +224,52 @@ async function handleTranslatePage() {
     console.log('[Gemini Translator] Getting text nodes...');
     const textNodes = getTextNodes(document.body);
     console.log('[Gemini Translator] Found', textNodes.length, 'text nodes');
-    
+
     // Calculate total characters
     const totalChars = textNodes.reduce((sum, node) => {
       const text = node.textContent.trim();
       return text.length >= 3 ? sum + text.length : sum;
     }, 0);
     console.log('[Gemini Translator] Total characters:', totalChars);
-    
+
     // Determine translation strategy
     // CHANGED: Lower threshold to 3000 chars to make lazy mode default for most pages
     const LAZY_MODE_THRESHOLD = 3000; // If more than 3000 chars, use lazy mode
-    
+
     if (totalChars > LAZY_MODE_THRESHOLD) {
       console.log('[Gemini Translator] Large page detected, using lazy translation mode');
-      showNotification(`Trang lớn (${Math.round(totalChars/1000)}KB text), dịch theo scroll...`, 'info');
+      showNotification(`Trang lớn (${Math.round(totalChars / 1000)}KB text), dịch theo scroll...`, 'info');
       await startLazyTranslation(textNodes, apiKey, actualModel);
       return;
     }
-    
+
     // For small pages, translate all at once
     console.log('[Gemini Translator] Small page, translating all at once');
-    
+
     // Group text nodes into chunks to avoid token limits
     const textMap = [];
     const chunks = [];
     let currentChunk = '';
     let chunkMap = [];
-    
+
     textNodes.forEach((node, index) => {
       const text = node.textContent;
       const trimmed = text.trim();
       if (trimmed && trimmed.length >= 3) {
         // Store both original (with whitespace) and trimmed version
-        const entry = { 
-          node, 
-          original: text, 
+        const entry = {
+          node,
+          original: text,
           trimmed: trimmed,
           index,
           hasLeadingSpace: text.startsWith(' ') || text.startsWith('\t'),
           hasTrailingSpace: text.endsWith(' ') || text.endsWith('\t')
         };
         textMap.push(entry);
-        
+
         // Use trimmed version for translation, but preserve whitespace info
         const line = `[${index}]${trimmed}\n`;
-        
+
         // Reduce chunk size to 2000 chars to avoid MAX_TOKENS
         if (currentChunk.length + line.length > 2000 && currentChunk.length > 0) {
           chunks.push({ text: currentChunk, map: chunkMap });
@@ -278,37 +281,37 @@ async function handleTranslatePage() {
         }
       }
     });
-    
+
     // Add last chunk
     if (currentChunk.length > 0) {
       chunks.push({ text: currentChunk, map: chunkMap });
     }
-    
+
     console.log('[Gemini Translator] Split into', chunks.length, 'chunks');
-    
+
     // Detect text style/tone for better translation
     const textStyle = detectTextStyle(textMap);
     console.log('[Gemini Translator] Detected text style:', textStyle);
-    
+
     // Show sticky notification with model and writing style
     showStickyNotification(actualModel, textStyle);
     showNotification(`Phát hiện văn phong: ${textStyle.name}`, 'info');
-    
+
     // Translate each chunk with retry logic
     let totalApplied = 0;
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
-      console.log(`[Gemini Translator] Translating chunk ${i+1}/${chunks.length} (${chunk.text.length} chars)...`);
-      
+      console.log(`[Gemini Translator] Translating chunk ${i + 1}/${chunks.length} (${chunk.text.length} chars)...`);
+
       let success = false;
       let retryCount = 0;
       const maxRetries = 3;
-      
+
       while (!success && retryCount < maxRetries) {
         try {
           // Check if chunk is cached
           const translation = await translateWithCache(chunk.text, apiKey, textStyle);
-          
+
           // Parse and apply translations
           const translatedText = translation;
           // Split and filter properly
@@ -317,19 +320,19 @@ async function handleTranslatePage() {
             .map(l => l.trim())
             .filter(l => l.length > 0)
             .filter(l => /^\[\d+\]/.test(l));
-          
-          console.log(`[Gemini Translator] Chunk ${i+1}: got ${allLines.length} raw lines, ${lines.length} valid lines, expected ${chunk.map.length}`);
-          
+
+          console.log(`[Gemini Translator] Chunk ${i + 1}: got ${allLines.length} raw lines, ${lines.length} valid lines, expected ${chunk.map.length}`);
+
           // Log first and last lines to check for missing chunks
           if (lines.length > 0) {
-            console.log(`[Gemini Translator] Chunk ${i+1} first line: ${lines[0].substring(0, 80)}`);
-            console.log(`[Gemini Translator] Chunk ${i+1} last line: ${lines[lines.length-1].substring(0, 80)}`);
+            console.log(`[Gemini Translator] Chunk ${i + 1} first line: ${lines[0].substring(0, 80)}`);
+            console.log(`[Gemini Translator] Chunk ${i + 1} last line: ${lines[lines.length - 1].substring(0, 80)}`);
           }
-          
+
           if (lines.length < chunk.map.length) {
-            console.warn(`[Gemini Translator] Chunk ${i+1}: Missing ${chunk.map.length - lines.length} translations!`);
-            console.warn(`[Gemini Translator] Expected indices: ${chunk.map[0].index} to ${chunk.map[chunk.map.length-1].index}`);
-            
+            console.warn(`[Gemini Translator] Chunk ${i + 1}: Missing ${chunk.map.length - lines.length} translations!`);
+            console.warn(`[Gemini Translator] Expected indices: ${chunk.map[0].index} to ${chunk.map[chunk.map.length - 1].index}`);
+
             // Find which indices are missing
             const receivedIndices = new Set();
             lines.forEach(line => {
@@ -340,7 +343,7 @@ async function handleTranslatePage() {
             console.warn(`[Gemini Translator] Missing indices: [${missingIndices.join(', ')}]`);
             console.warn(`[Gemini Translator] Raw response preview: ${translatedText.substring(0, 300)}`);
           }
-          
+
           let chunkApplied = 0;
           lines.forEach((line, lineIdx) => {
             // More flexible regex to handle edge cases
@@ -348,20 +351,20 @@ async function handleTranslatePage() {
             if (match) {
               const index = parseInt(match[1]);
               let translation = match[2].trim();
-              
+
               const entry = textMap.find(e => e.index === index);
               if (entry) {
                 // Allow empty translations for single chars like punctuation
                 if (!translation && entry.trimmed.length === 1) {
                   translation = entry.trimmed; // Keep original for single char
                 }
-                
+
                 if (translation) {
                   // Restore original whitespace padding
                   let finalText = translation;
                   if (entry.hasLeadingSpace) finalText = ' ' + finalText;
                   if (entry.hasTrailingSpace) finalText = finalText + ' ';
-                  
+
                   entry.node.textContent = finalText;
                   totalApplied++;
                   chunkApplied++;
@@ -375,32 +378,32 @@ async function handleTranslatePage() {
               console.warn(`[Gemini Translator] Line ${lineIdx} did not match format: "${line.substring(0, 50)}..."`);
             }
           });
-          
-          console.log(`[Gemini Translator] Chunk ${i+1} applied ${chunkApplied} translations`);
-          showNotification(`Đã dịch ${i+1}/${chunks.length} phần (${totalApplied} đoạn)...`, 'info');
+
+          console.log(`[Gemini Translator] Chunk ${i + 1} applied ${chunkApplied} translations`);
+          showNotification(`Đã dịch ${i + 1}/${chunks.length} phần (${totalApplied} đoạn)...`, 'info');
           success = true;
-          
+
         } catch (error) {
-          console.error(`[Gemini Translator] Chunk ${i+1} error:`, error);
+          console.error(`[Gemini Translator] Chunk ${i + 1} error:`, error);
           retryCount++;
-          
+
           if (retryCount < maxRetries) {
             const waitTime = Math.min(1000 * Math.pow(2, retryCount), 5000);
             console.log(`[Gemini Translator] Waiting ${waitTime}ms before retry...`);
-            showNotification(`Chunk ${i+1} lỗi, thử lại sau ${waitTime/1000}s...`, 'info');
+            showNotification(`Chunk ${i + 1} lỗi, thử lại sau ${waitTime / 1000}s...`, 'info');
             await sleep(waitTime);
           } else {
-            showNotification(`Lỗi dịch chunk ${i+1}: ${error.message}`, 'error');
+            showNotification(`Lỗi dịch chunk ${i + 1}: ${error.message}`, 'error');
           }
         }
       }
-      
+
       // Small delay between chunks
       if (i < chunks.length - 1 && success) {
         await sleep(300);
       }
     }
-    
+
     console.log('[Gemini Translator] Applied', totalApplied, 'translations out of', textMap.length);
 
     isTranslated = true;
@@ -417,20 +420,20 @@ async function handleTranslatePage() {
 // Translate text with caching
 async function translateWithCache(text, apiKey, textStyle) {
   const cacheKey = getCacheKey(text, textStyle);
-  
+
   // Check cache first
   if (translationCache.has(cacheKey)) {
     console.log('[Gemini Translator] Cache HIT for', text.substring(0, 50));
     return translationCache.get(cacheKey);
   }
-  
+
   console.log('[Gemini Translator] Cache MISS, calling API for', text.substring(0, 50));
-  
+
   // Check if extension context is valid before making API call
   if (!isExtensionContextValid()) {
     throw new Error('Extension context invalidated - please reload the page');
   }
-  
+
   // Call API with promise wrapper to handle channel closing
   const response = await new Promise((resolve, reject) => {
     try {
@@ -446,19 +449,19 @@ async function translateWithCache(text, apiKey, textStyle) {
           reject(new Error(chrome.runtime.lastError.message));
           return;
         }
-        
+
         if (!response) {
           reject(new Error('No response from background script'));
           return;
         }
-        
+
         resolve(response);
       });
     } catch (error) {
       reject(error);
     }
   });
-  
+
   if (response.success) {
     // Validate that translation is actually in Vietnamese
     const translation = response.translation;
@@ -467,7 +470,7 @@ async function translateWithCache(text, apiKey, textStyle) {
       console.warn('[Gemini Translator] Sample:', translation.substring(0, 200));
       // Don't throw error, but log warning - still cache it
     }
-    
+
     // Cache the result
     translationCache.set(cacheKey, translation);
     saveCache();
@@ -482,20 +485,20 @@ function isVietnameseText(text) {
   // Vietnamese has special characters with diacritics
   const vietnameseChars = /[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i;
   const chineseChars = /[\u4e00-\u9fff]/;
-  
+
   // Sample first 500 chars
   const sample = text.substring(0, 500);
-  
+
   // If it has Chinese chars and no Vietnamese chars, it's likely Chinese
   if (chineseChars.test(sample) && !vietnameseChars.test(sample)) {
     return false;
   }
-  
+
   // If it has Vietnamese chars, it's likely Vietnamese
   if (vietnameseChars.test(sample)) {
     return true;
   }
-  
+
   // For text without special chars (like numbers, English), assume OK
   return true;
 }
@@ -503,7 +506,7 @@ function isVietnameseText(text) {
 // Handle full page translation (no lazy mode, with progress bar)
 async function handleTranslatePageFull() {
   console.log('[Gemini Translator] Starting FULL page translation...');
-  
+
   // Stop lazy translation if active
   if (isLazyMode && scrollObserver) {
     scrollObserver.disconnect();
@@ -511,7 +514,7 @@ async function handleTranslatePageFull() {
     isLazyMode = false;
     console.log('[Gemini Translator] Stopped lazy mode');
   }
-  
+
   if (isTranslated) {
     console.log('[Gemini Translator] Page already translated, restoring original...');
     restoreOriginalContent();
@@ -524,14 +527,14 @@ async function handleTranslatePageFull() {
   try {
     // Get API key
     const { apiKey, preferredModel } = await chrome.runtime.sendMessage({ action: 'getApiKey' });
-    
+
     if (!apiKey) {
       showNotification('Vui lòng cấu hình Gemini API key trong popup extension', 'error');
       hideLoadingIndicator();
       hideProgressBar();
       return;
     }
-    
+
     // Test API to get actual model being used
     const testResponse = await chrome.runtime.sendMessage({
       action: 'translate',
@@ -549,30 +552,60 @@ async function handleTranslatePageFull() {
     // Get all text nodes
     const textNodes = getTextNodes(document.body);
     console.log('[Gemini Translator] Found', textNodes.length, 'text nodes');
-    
+
+    // Calculate total characters for balancing
+    const totalChars = textNodes.reduce((sum, node) => {
+      const text = node.textContent.trim();
+      return text.length >= 3 ? sum + text.length : sum;
+    }, 0);
+
     // Group text nodes into chunks
+    // Balanced Chunking Algorithm (User Request: Min 3 threads, Max 15k chars, Even Load)
+    const MIN_CHUNKS = 3;
+    const MAX_CHUNK_SIZE = 15000;
+
+    // Calculate optimal chunk count
+    // 1. Minimum chunks needed to respect the 15k limit
+    const chunksByLimit = Math.ceil(totalChars / MAX_CHUNK_SIZE);
+
+    // 2. Enforce minimum concurrency (3) if text is large enough (> 3000 chars)
+    // If text is tiny (e.g. 1000 chars), don't force 3 tiny requests of 300 chars.
+    let targetChunkCount = chunksByLimit;
+    if (totalChars > 3000) {
+      targetChunkCount = Math.max(chunksByLimit, MIN_CHUNKS);
+    }
+
+    // 3. Calculate the ideal size for even distribution
+    const optimalChunkSize = Math.ceil(totalChars / targetChunkCount);
+
+    console.log(`[Gemini Translator] Balancing Load: Total ${totalChars} chars`);
+    console.log(`[Gemini Translator] Target Chunks: ${targetChunkCount} (Limit needed: ${chunksByLimit}, Min needed: ${MIN_CHUNKS})`);
+    console.log(`[Gemini Translator] Optimal Batch Size: ~${optimalChunkSize} chars`);
+
+    // Group text nodes into balanced chunks
     const textMap = [];
     const chunks = [];
     let currentChunk = '';
     let chunkMap = [];
-    
+
     textNodes.forEach((node, index) => {
       const text = node.textContent;
       const trimmed = text.trim();
       if (trimmed && trimmed.length >= 3) {
-        const entry = { 
-          node, 
-          original: text, 
+        const entry = {
+          node,
+          original: text,
           trimmed: trimmed,
           index,
           hasLeadingSpace: text.startsWith(' ') || text.startsWith('\t'),
           hasTrailingSpace: text.endsWith(' ') || text.endsWith('\t')
         };
         textMap.push(entry);
-        
+
         const line = `[${index}]${trimmed}\n`;
-        
-        if (currentChunk.length + line.length > 2000 && currentChunk.length > 0) {
+
+        // Use optimalChunkSize instead of fixed limit
+        if (currentChunk.length + line.length > optimalChunkSize && currentChunk.length > 0) {
           chunks.push({ text: currentChunk, map: chunkMap });
           currentChunk = line;
           chunkMap = [entry];
@@ -582,147 +615,170 @@ async function handleTranslatePageFull() {
         }
       }
     });
-    
+
+    // Add last chunk
     if (currentChunk.length > 0) {
       chunks.push({ text: currentChunk, map: chunkMap });
     }
-    
+
     console.log('[Gemini Translator] Split into', chunks.length, 'chunks');
     updateProgressBar(0, chunks.length);
-    
+
     // Detect text style
     const textStyle = detectTextStyle(textMap);
     console.log('[Gemini Translator] Detected text style:', textStyle);
-    
+
     // Show sticky notification with model and writing style
     showStickyNotification(actualModel, textStyle);
-    
-    // Translate each chunk with progress
+
+    // Translate chunks with Worker Queue logic (High Concurrency + Pause + Fail-Fast)
     let totalApplied = 0;
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      console.log(`[Gemini Translator] Translating chunk ${i+1}/${chunks.length}...`);
-      updateProgressBar(i, chunks.length);
-      
-      // Retry logic with language validation
-      let retryCount = 0;
-      const maxRetries = 2;
-      let translation = null;
-      
-      while (retryCount <= maxRetries) {
-        try {
-          translation = await translateWithCache(chunk.text, apiKey, textStyle);
-          
-          // Validate language - check if it's actually Vietnamese
-          if (!isVietnameseText(translation)) {
-            console.warn(`[Gemini Translator] Chunk ${i+1} attempt ${retryCount+1}: Not Vietnamese, retrying...`);
-            console.warn(`[Gemini Translator] Sample: ${translation.substring(0, 150)}`);
-            
-            if (retryCount < maxRetries) {
-              // Clear cache for this chunk to force re-translation
-              const cacheKey = getCacheKey(chunk.text, textStyle);
-              translationCache.delete(cacheKey);
-              retryCount++;
-              await sleep(500);
-              continue;
-            } else {
-              console.error(`[Gemini Translator] Chunk ${i+1}: Failed after ${maxRetries+1} attempts - not Vietnamese`);
-              // Continue anyway, but log error
+
+    // reset states
+    isPaused = false;
+    fatalErrorOccurred = false;
+
+    // Create a queue of tasks
+    const queue = chunks.map((chunk, index) => ({ chunk, index }));
+    let activeRequests = 0;
+    let completedChunks = 0;
+
+    console.log(`[Gemini Translator] Starting worker queue with ${CONCURRENCY_LIMIT} threads`);
+
+    // Main loop: keep dispatching while there is work or active requests
+    while ((queue.length > 0 || activeRequests > 0) && !fatalErrorOccurred) {
+
+      // 1. Check Pause
+      if (isPaused) {
+        await sleep(200);
+        continue;
+      }
+
+      // 2. Dispatch new workers if slot available
+      while (queue.length > 0 && activeRequests < CONCURRENCY_LIMIT && !isPaused && !fatalErrorOccurred) {
+        const item = queue.shift();
+        activeRequests++;
+
+        // Process chunk asynchronously (FIRE AND FORGET - but tracked via activeRequests)
+        processChunkWithRetry(item.chunk, item.index, chunks.length, apiKey, textStyle)
+          .then((success) => {
+            activeRequests--;
+            if (success) {
+              completedChunks++;
+              totalApplied++; // Note: strictly this should count actual applied segments, simplified here
+              updateProgressBar(completedChunks, chunks.length);
             }
-          }
-          
-          // If we get here, translation is OK
-          break;
-          
-        } catch (error) {
-          console.error(`[Gemini Translator] Chunk ${i+1} attempt ${retryCount+1} error:`, error);
-          if (retryCount < maxRetries) {
-            retryCount++;
-            await sleep(1000);
-          } else {
-            throw error;
-          }
-        }
+          })
+          .catch((error) => {
+            activeRequests--;
+            console.error(`[Gemini Translator] Fatal error in chunk ${item.index}:`, error);
+            fatalErrorOccurred = true; // Trigger Fail-Fast
+            showNotification(`Lỗi dừng dịch: ${error.message}`, 'error');
+          });
       }
-      
-      if (!translation) {
-        throw new Error(`Failed to translate chunk ${i+1}`);
-      }
-      
-      try {
-        const translation = await translateWithCache(chunk.text, apiKey, textStyle);
-        
-        const allLines = translation.split('\n');
-        const lines = allLines
-          .map(l => l.trim())
-          .filter(l => l.length > 0)
-          .filter(l => /^\[\d+\]/.test(l));
-        
-        console.log(`[Gemini Translator] Full chunk ${i+1}: got ${allLines.length} raw lines, ${lines.length} valid lines, expected ${chunk.map.length}`);
-        
-        // Log first and last for debugging
-        if (lines.length > 0) {
-          console.log(`[Gemini Translator] Full chunk ${i+1} first: ${lines[0].substring(0, 80)}`);
-          console.log(`[Gemini Translator] Full chunk ${i+1} last: ${lines[lines.length-1].substring(0, 80)}`);
-        }
-        if (lines.length < chunk.map.length) {
-          console.warn(`[Gemini Translator] Full chunk ${i+1}: Missing translations!`);
-          console.warn(`[Gemini Translator] Raw response: ${translation.substring(0, 300)}`);
-        }
-        
-        lines.forEach((line, lineIdx) => {
-          const match = line.match(/^\[(\d+)\](.*)$/);
-          if (match) {
-            const index = parseInt(match[1]);
-            let translation = match[2].trim();
-            
-            const entry = textMap.find(e => e.index === index);
-            if (entry) {
-              // Allow empty translations for single chars
-              if (!translation && entry.trimmed.length === 1) {
-                translation = entry.trimmed;
-              }
-              
-              if (translation) {
-                let finalText = translation;
-                if (entry.hasLeadingSpace) finalText = ' ' + finalText;
-                if (entry.hasTrailingSpace) finalText = finalText + ' ';
-                
-                entry.node.textContent = finalText;
-                totalApplied++;
-              } else {
-                console.warn(`[Gemini Translator] Empty translation for index ${index}`);
-              }
-            } else {
-              console.warn(`[Gemini Translator] Index ${index} not found (line ${lineIdx})`);
-            }
-          } else {
-            console.warn(`[Gemini Translator] Line ${lineIdx} format error: "${line.substring(0, 40)}..."`);
-          }
-        });
-        
-        updateProgressBar(i + 1, chunks.length);
-        
-      } catch (error) {
-        console.error(`[Gemini Translator] Chunk ${i+1} error:`, error);
-        showNotification(`Lỗi dịch chunk ${i+1}: ${error.message}`, 'error');
-      }
-      
-      if (i < chunks.length - 1) await sleep(300);
+
+      // 3. Wait a bit before next loop iteration to prevent tight CPU loop
+      await sleep(50);
     }
-    
-    console.log('[Gemini Translator] Applied', totalApplied, 'translations');
+
+    if (fatalErrorOccurred) {
+      throw new Error('Dịch bị dừng do lỗi.');
+    }
+
+    console.log('[Gemini Translator] Translation queue finished.');
     isTranslated = true;
     hideProgressBar();
     showNotification('Đã dịch toàn bộ trang thành công!', 'success');
-    
+
   } catch (error) {
-    console.error('[Gemini Translator] Translation error:', error);
-    showNotification('Lỗi khi dịch: ' + error.message, 'error');
+    // Fail-fast handled here
+    if (fatalErrorOccurred) {
+      // Already notified
+    } else {
+      console.error('[Gemini Translator] Translation error:', error);
+      showNotification('Lỗi khi dịch: ' + error.message, 'error');
+    }
     hideProgressBar();
   } finally {
     hideLoadingIndicator();
   }
+}
+
+// Helper: Process single chunk with retry (Moved out of loop for clarity)
+async function processChunkWithRetry(chunk, index, totalChunks, apiKey, textStyle) {
+  if (fatalErrorOccurred) return false;
+
+  console.log(`[Gemini Translator] Worker starting chunk ${index + 1}/${totalChunks}...`);
+
+  let retryCount = 0;
+  const maxRetries = 2;
+
+  while (retryCount <= maxRetries) {
+    if (fatalErrorOccurred) return false;
+    if (isPaused) {
+      // If paused mid-retry, wait.
+      await sleep(500);
+      continue;
+    }
+
+    try {
+      const translation = await translateWithCache(chunk.text, apiKey, textStyle);
+
+      // Validate
+      if (!isVietnameseText(translation)) {
+        if (retryCount < maxRetries) {
+          console.warn(`[Gemini Translator] Chunk ${index + 1}: Validation failed, retrying...`);
+          const cacheKey = getCacheKey(chunk.text, textStyle);
+          translationCache.delete(cacheKey);
+          retryCount++;
+          await sleep(500);
+          continue;
+        } else {
+          throw new Error(`Chunk ${index + 1} failed validation (not Vietnamese)`);
+        }
+      }
+
+      // Apply
+      applyTranslationToMap(translation, chunk.map);
+      return true; // Success
+
+    } catch (error) {
+      // Check for Response too long (Permanent Error -> Fail Fast)
+      if (error.message && error.message.includes('Response too long')) {
+        throw error; // Fatal
+      }
+
+      if (retryCount < maxRetries) {
+        retryCount++;
+        await sleep(1000 * Math.pow(2, retryCount));
+      } else {
+        throw error; // Failed all retries -> Fatal
+      }
+    }
+  }
+  return false;
+}
+
+// Helper to apply translation
+function applyTranslationToMap(translatedText, map) {
+  const allLines = translatedText.split('\n');
+  allLines.forEach(line => {
+    const match = line.match(/^\[(\d+)\](.*)$/);
+    if (match) {
+      const idx = parseInt(match[1]);
+      let txt = match[2].trim();
+      const entry = map.find(e => e.index === idx);
+      if (entry) {
+        if (!txt && entry.trimmed.length === 1) txt = entry.trimmed;
+        if (txt) {
+          let final = txt;
+          if (entry.hasLeadingSpace) final = ' ' + final;
+          if (entry.hasTrailingSpace) final = final + ' ';
+          entry.node.textContent = final;
+        }
+      }
+    }
+  });
 }
 
 // Translate a batch of text nodes
@@ -742,21 +798,21 @@ function getTextNodes(element) {
     element,
     NodeFilter.SHOW_TEXT,
     {
-      acceptNode: function(node) {
+      acceptNode: function (node) {
         // Skip script, style, and other non-visible elements
         const parent = node.parentElement;
         if (!parent) return NodeFilter.FILTER_REJECT;
-        
+
         const tagName = parent.tagName.toLowerCase();
         if (['script', 'style', 'noscript', 'iframe', 'object'].includes(tagName)) {
           return NodeFilter.FILTER_REJECT;
         }
-        
+
         // Skip if text is just whitespace
         if (node.textContent.trim().length === 0) {
           return NodeFilter.FILTER_REJECT;
         }
-        
+
         return NodeFilter.FILTER_ACCEPT;
       }
     }
@@ -786,7 +842,7 @@ async function handleTranslateSelection(text) {
 
   try {
     const { apiKey } = await chrome.runtime.sendMessage({ action: 'getApiKey' });
-    
+
     if (!apiKey) {
       showNotification('Vui lòng cấu hình Gemini API key', 'error');
       hideLoadingIndicator();
@@ -822,7 +878,7 @@ function restoreOriginalContent() {
     }
     isLazyMode = false;
     pendingTranslations = [];
-    
+
     document.body.replaceWith(originalContent.cloneNode(true));
     isTranslated = false;
     translationCache.clear();
@@ -895,14 +951,14 @@ function showTranslationPopup(original, translation, selectionRect) {
   // Explain handler
   let explanationLoaded = false;
   let autoCloseTimer = null;
-  
+
   explainBtn.addEventListener('click', async () => {
     if (!explanationLoaded) {
       explanationSection.style.display = 'block';
       await loadSemanticExplanation(original, explanationSection.querySelector('.explanation-content'));
       explanationLoaded = true;
       explainBtn.classList.add('active');
-      
+
       // Extend auto-close time when explanation is loaded
       if (autoCloseTimer) {
         clearTimeout(autoCloseTimer);
@@ -956,7 +1012,7 @@ function showTranslationPopup(original, translation, selectionRect) {
       popup.classList.add('popup-closing');
       setTimeout(() => popup.remove(), 200);
     }
-  }, 30000);
+  }, 15000);
 }
 
 // Calculate optimal popup position
@@ -965,7 +1021,7 @@ function positionPopupOptimally(popup, selectionRect) {
   const viewportHeight = window.innerHeight;
   const scrollX = window.scrollX;
   const scrollY = window.scrollY;
-  
+
   // Get popup dimensions (approximate before actual render)
   popup.style.visibility = 'hidden';
   popup.style.display = 'block';
@@ -973,7 +1029,7 @@ function positionPopupOptimally(popup, selectionRect) {
   const popupHeight = popup.offsetHeight;
   popup.style.visibility = '';
   popup.style.display = '';
-  
+
   const margin = 10;
   let top, left;
   let positionClass = '';
@@ -1012,7 +1068,7 @@ function positionPopupOptimally(popup, selectionRect) {
     for (const pos of positions) {
       const fitsVertically = pos.top >= scrollY && (pos.top + popupHeight) <= (scrollY + viewportHeight);
       const fitsHorizontally = pos.left >= scrollX && (pos.left + popupWidth) <= (scrollX + viewportWidth);
-      
+
       if (fitsVertically && fitsHorizontally) {
         bestPosition = pos;
         break;
@@ -1050,7 +1106,7 @@ function positionPopupOptimally(popup, selectionRect) {
 async function loadSemanticExplanation(text, container) {
   try {
     const { apiKey } = await chrome.runtime.sendMessage({ action: 'getApiKey' });
-    
+
     if (!apiKey) {
       container.innerHTML = '<div class="explanation-error">⚠️ Vui lòng cấu hình API key</div>';
       return;
@@ -1077,7 +1133,7 @@ async function loadSemanticExplanation(text, container) {
 // Format explanation text with proper markdown parsing
 function formatExplanation(text) {
   if (!text) return '';
-  
+
   // Split into lines for processing
   let lines = text.split('\n');
   let html = [];
@@ -1085,11 +1141,11 @@ function formatExplanation(text) {
   let inCodeBlock = false;
   let inNumberedList = false;
   let codeBlockContent = [];
-  
+
   for (let i = 0; i < lines.length; i++) {
     let line = lines[i];
     let trimmedLine = line.trim();
-    
+
     // Handle code blocks
     if (trimmedLine.startsWith('```')) {
       if (inCodeBlock) {
@@ -1113,12 +1169,12 @@ function formatExplanation(text) {
       }
       continue;
     }
-    
+
     if (inCodeBlock) {
       codeBlockContent.push(line);
       continue;
     }
-    
+
     // Skip empty lines with proper spacing
     if (!trimmedLine) {
       if (inList) {
@@ -1132,7 +1188,7 @@ function formatExplanation(text) {
       html.push('<div class="explanation-spacer"></div>');
       continue;
     }
-    
+
     // Headers: ### Header or ## Header or # Header
     if (/^#{1,6}\s+/.test(trimmedLine)) {
       if (inList) {
@@ -1143,14 +1199,14 @@ function formatExplanation(text) {
         html.push('</ol>');
         inNumberedList = false;
       }
-      
+
       const level = trimmedLine.match(/^#+/)[0].length;
       let headerText = trimmedLine.replace(/^#{1,6}\s+/, '').replace(/\s*#+\s*$/, '');
       headerText = processInlineFormatting(headerText);
       html.push(`<div class="explanation-header level-${level}">${headerText}</div>`);
       continue;
     }
-    
+
     // Headers with numbers at start: "1. **Text**" or just "1. Text"
     if (/^(\d+)\.\s+\*\*/.test(trimmedLine)) {
       if (inList) {
@@ -1161,13 +1217,13 @@ function formatExplanation(text) {
         html.push('</ol>');
         inNumberedList = false;
       }
-      
+
       let headerText = trimmedLine.replace(/^\d+\.\s+/, '').replace(/^\*\*/, '').replace(/\*\*:?\s*$/, '');
       headerText = processInlineFormatting(headerText);
       html.push(`<div class="explanation-header">${headerText}</div>`);
       continue;
     }
-    
+
     // Numbered list items: "1. text" or "1) text"
     if (/^(\d+)[.)]\s+/.test(trimmedLine)) {
       if (inList) {
@@ -1178,13 +1234,13 @@ function formatExplanation(text) {
         html.push('<ol class="explanation-numbered-list">');
         inNumberedList = true;
       }
-      
+
       let itemText = trimmedLine.replace(/^\d+[.)]\s+/, '');
       itemText = processInlineFormatting(itemText);
       html.push(`<li>${itemText}</li>`);
       continue;
     }
-    
+
     // Bullet list items: lines starting with -, •, *, or +
     if (/^[\-\•\*\+]\s+/.test(trimmedLine)) {
       if (inNumberedList) {
@@ -1195,13 +1251,13 @@ function formatExplanation(text) {
         html.push('<ul class="explanation-list">');
         inList = true;
       }
-      
+
       let itemText = trimmedLine.replace(/^[\-\•\*\+]\s+/, '');
       itemText = processInlineFormatting(itemText);
       html.push(`<li>${itemText}</li>`);
       continue;
     }
-    
+
     // Blockquotes: > text
     if (trimmedLine.startsWith('> ')) {
       if (inList) {
@@ -1212,13 +1268,13 @@ function formatExplanation(text) {
         html.push('</ol>');
         inNumberedList = false;
       }
-      
+
       let quoteText = trimmedLine.replace(/^>\s+/, '');
       quoteText = processInlineFormatting(quoteText);
       html.push(`<div class="explanation-blockquote">${quoteText}</div>`);
       continue;
     }
-    
+
     // Horizontal rules: --- or *** or ___
     if (/^([-*_]){3,}$/.test(trimmedLine)) {
       if (inList) {
@@ -1232,7 +1288,7 @@ function formatExplanation(text) {
       html.push('<hr class="explanation-divider">');
       continue;
     }
-    
+
     // Regular paragraph
     if (inList) {
       html.push('</ul>');
@@ -1242,11 +1298,11 @@ function formatExplanation(text) {
       html.push('</ol>');
       inNumberedList = false;
     }
-    
+
     trimmedLine = processInlineFormatting(trimmedLine);
     html.push(`<div class="explanation-paragraph">${trimmedLine}</div>`);
   }
-  
+
   // Close any open lists or code blocks
   if (inList) {
     html.push('</ul>');
@@ -1259,7 +1315,7 @@ function formatExplanation(text) {
     html.push(codeBlockContent.map(l => escapeHtml(l)).join('\n'));
     html.push('</div>');
   }
-  
+
   return html.join('\n');
 }
 
@@ -1267,27 +1323,27 @@ function formatExplanation(text) {
 function processInlineFormatting(text) {
   // Escape HTML first
   text = escapeHtml(text);
-  
+
   // Inline code: `code` (must come first to preserve content)
   text = text.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
-  
+
   // Bold: **text** or __text__ (must come before italic)
   text = text.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>');
   text = text.replace(/__([^_]+?)__/g, '<strong>$1</strong>');
-  
+
   // Italic: *text* or _text_ (single char, not in middle of word)
   text = text.replace(/(?<!\w)\*([^*\s][^*]*?)\*(?!\w)/g, '<em>$1</em>');
   text = text.replace(/(?<!\w)_([^_\s][^_]*?)_(?!\w)/g, '<em>$1</em>');
-  
+
   // Strikethrough: ~~text~~
   text = text.replace(/~~([^~]+?)~~/g, '<del>$1</del>');
-  
+
   // Links: [text](url)
   text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-  
+
   // Highlight/mark: ==text==
   text = text.replace(/==([^=]+)==/g, '<mark>$1</mark>');
-  
+
   return text;
 }
 
@@ -1315,7 +1371,7 @@ function showStickyNotification(modelName, textStyle) {
   if (existing) {
     existing.remove();
   }
-  
+
   const notification = document.createElement('div');
   notification.id = 'gemini-translator-sticky-notification';
   notification.className = 'gemini-translator-sticky-notification';
@@ -1333,16 +1389,16 @@ function showStickyNotification(modelName, textStyle) {
       </div>
     </div>
   `;
-  
+
   document.body.appendChild(notification);
-  
+
   // Add close button handler
   const closeBtn = notification.querySelector('.sticky-notification-close');
   closeBtn.addEventListener('click', () => {
     notification.classList.add('fade-out');
     setTimeout(() => notification.remove(), 300);
   });
-  
+
   // Show with animation
   setTimeout(() => {
     notification.classList.add('show');
@@ -1379,7 +1435,10 @@ function showProgressBar() {
     progressBar.className = 'gemini-translator-progress';
     progressBar.innerHTML = `
       <div class="progress-container">
-        <div class="progress-text">Đang dịch: <span id="progress-current">0</span>/<span id="progress-total">0</span></div>
+        <div class="progress-header">
+          <div class="progress-text">Đang dịch: <span id="progress-current">0</span>/<span id="progress-total">0</span></div>
+          <button id="gemini-translator-pause-btn" class="pause-btn" title="Tạm dừng/Tiếp tục">⏯</button>
+        </div>
         <div class="progress-bar-bg">
           <div class="progress-bar-fill" id="progress-bar-fill" style="width: 0%"></div>
         </div>
@@ -1387,6 +1446,17 @@ function showProgressBar() {
       </div>
     `;
     document.body.appendChild(progressBar);
+
+    // Add pause listener
+    const pauseBtn = document.getElementById('gemini-translator-pause-btn');
+    if (pauseBtn) {
+      pauseBtn.addEventListener('click', () => {
+        isPaused = !isPaused;
+        pauseBtn.textContent = isPaused ? '▶' : '⏯';
+        pauseBtn.title = isPaused ? 'Tiếp tục' : 'Tạm dừng';
+        showNotification(isPaused ? 'Đã tạm dừng dịch' : 'Đang tiếp tục dịch...', 'info');
+      });
+    }
   }
   progressBar.style.display = 'block';
 }
@@ -1405,10 +1475,10 @@ function updateProgressBar(current, total) {
   const totalEl = document.getElementById('progress-total');
   const fillEl = document.getElementById('progress-bar-fill');
   const percentEl = document.getElementById('progress-percent');
-  
+
   if (currentEl) currentEl.textContent = current;
   if (totalEl) totalEl.textContent = total;
-  
+
   const percent = total > 0 ? Math.round((current / total) * 100) : 0;
   if (fillEl) fillEl.style.width = percent + '%';
   if (percentEl) percentEl.textContent = percent + '%';
@@ -1428,7 +1498,7 @@ function sleep(ms) {
 // Start lazy translation mode (translate as user scrolls)
 async function startLazyTranslation(textNodes, apiKey, modelName) {
   isLazyMode = true;
-  
+
   // Detect text style and preserve whitespace
   const textMap = textNodes.map((node, index) => {
     const text = node.textContent;
@@ -1442,22 +1512,22 @@ async function startLazyTranslation(textNodes, apiKey, modelName) {
       hasTrailingSpace: text.endsWith(' ') || text.endsWith('\t')
     };
   }).filter(e => e.trimmed.length >= 3);
-  
+
   const textStyle = detectTextStyle(textMap);
   console.log('[Gemini Translator] Detected text style:', textStyle);
-  
+
   // Show sticky notification with model and writing style
   showStickyNotification(modelName || 'gemini-2.5-flash', textStyle);
-  
+
   // Mark all nodes as pending
   pendingTranslations = textMap;
-  
+
   // Translate visible content first
   await translateVisibleContent(apiKey, textStyle);
-  
+
   // Set up intersection observer for lazy translation
   setupScrollObserver(apiKey, textStyle);
-  
+
   isTranslated = true;
   hideLoadingIndicator();
   showNotification('Đã dịch phần hiển thị. Scroll để dịch tiếp...', 'success');
@@ -1467,32 +1537,32 @@ async function startLazyTranslation(textNodes, apiKey, modelName) {
 async function translateVisibleContent(apiKey, textStyle) {
   const viewportHeight = window.innerHeight;
   const visibleNodes = [];
-  
+
   for (const entry of pendingTranslations) {
     // Text nodes don't have getBoundingClientRect, use parent element
     const element = entry.node.parentElement;
     if (!element) continue;
-    
+
     const rect = element.getBoundingClientRect();
     // Check if node is in viewport or near it (within 3x viewport height)
     if (rect.top < viewportHeight * 3 && rect.bottom > -viewportHeight * 2) {
       visibleNodes.push(entry);
     }
   }
-  
+
   console.log(`[Gemini Translator] Translating ${visibleNodes.length} visible nodes`);
-  
+
   if (visibleNodes.length === 0) return;
-  
+
   // Group into chunks
   const chunks = [];
   let currentChunk = '';
   let chunkMap = [];
-  
+
   visibleNodes.forEach((entry) => {
     // Use trimmed version for translation
     const line = `[${entry.index}]${entry.trimmed}\n`;
-    
+
     if (currentChunk.length + line.length > 2000 && currentChunk.length > 0) {
       chunks.push({ text: currentChunk, map: chunkMap });
       currentChunk = line;
@@ -1502,44 +1572,44 @@ async function translateVisibleContent(apiKey, textStyle) {
       chunkMap.push(entry);
     }
   });
-  
+
   if (currentChunk.length > 0) {
     chunks.push({ text: currentChunk, map: chunkMap });
   }
-  
+
   // Translate chunks
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
-    
+
     try {
       const translation = await translateWithCache(chunk.text, apiKey, textStyle);
-      
+
       // Filter: only keep lines starting with [number]
       const allLines = translation.split('\n');
       const lines = allLines
         .map(l => l.trim())
         .filter(l => l.length > 0)
         .filter(l => /^\[\d+\]/.test(l));
-      console.log(`[Gemini Translator] Lazy chunk ${i+1}: got ${allLines.length} raw lines, ${lines.length} valid, expected ${chunk.map.length}`);        
+      console.log(`[Gemini Translator] Lazy chunk ${i + 1}: got ${allLines.length} raw lines, ${lines.length} valid, expected ${chunk.map.length}`);
       lines.forEach((line, lineIdx) => {
         const match = line.match(/^\[(\d+)\](.*)$/);
         if (match) {
           const index = parseInt(match[1]);
           let translation = match[2].trim();
-          
+
           const entry = chunk.map.find(e => e.index === index);
           if (entry) {
             // Allow empty for single chars
             if (!translation && entry.trimmed.length === 1) {
               translation = entry.trimmed;
             }
-            
+
             if (translation) {
               // Restore original whitespace
               let finalText = translation;
               if (entry.hasLeadingSpace) finalText = ' ' + finalText;
               if (entry.hasTrailingSpace) finalText = finalText + ' ';
-              
+
               entry.node.textContent = finalText;
               // Mark as translated
               const idx = pendingTranslations.findIndex(e => e.index === index);
@@ -1552,7 +1622,7 @@ async function translateVisibleContent(apiKey, textStyle) {
           console.warn(`[Gemini Translator] Lazy: Line ${lineIdx} format error: "${line.substring(0, 40)}..."`);
         }
       });
-      
+
       if (i < chunks.length - 1) await sleep(300);
     } catch (error) {
       console.error('[Gemini Translator] Error translating visible chunk:', error);
@@ -1565,19 +1635,19 @@ function setupScrollObserver(apiKey, textStyle) {
   if (scrollObserver) {
     scrollObserver.disconnect();
   }
-  
+
   const options = {
     root: null,
     rootMargin: '1000px', // Start translating when element is 1000px from viewport
     threshold: 0.01
   };
-  
+
   scrollObserver = new IntersectionObserver(async (entries) => {
     if (translationInProgress) return;
-    
+
     const nodesToTranslate = [];
     const processedIndexes = new Set();
-    
+
     for (const entry of entries) {
       if (entry.isIntersecting) {
         // Find all pending translations in this element
@@ -1589,14 +1659,14 @@ function setupScrollObserver(apiKey, textStyle) {
         }
       }
     }
-    
+
     if (nodesToTranslate.length > 0) {
       translationInProgress = true;
       await translateNodes(nodesToTranslate, apiKey, textStyle);
       translationInProgress = false;
     }
   }, options);
-  
+
   // Observe parent elements of all pending translations
   const observedElements = new Set();
   for (const pending of pendingTranslations) {
@@ -1606,9 +1676,9 @@ function setupScrollObserver(apiKey, textStyle) {
       scrollObserver.observe(element);
     }
   }
-  
+
   console.log(`[Gemini Translator] Observing ${observedElements.size} elements for lazy translation`);
-  
+
   // Fallback: Translate remaining nodes after 10 seconds of inactivity
   let inactivityTimer = null;
   const checkRemainingNodes = () => {
@@ -1622,7 +1692,7 @@ function setupScrollObserver(apiKey, textStyle) {
       }
     }, 10000);
   };
-  
+
   // Reset timer on scroll
   window.addEventListener('scroll', checkRemainingNodes, { passive: true });
   checkRemainingNodes();
@@ -1631,7 +1701,7 @@ function setupScrollObserver(apiKey, textStyle) {
 // Translate a set of nodes
 async function translateNodes(nodes, apiKey, textStyle) {
   if (nodes.length === 0) return;
-  
+
   // Check extension context before starting
   if (!isExtensionContextValid()) {
     console.warn('[Gemini Translator] Extension context invalid, stopping lazy translation');
@@ -1642,18 +1712,18 @@ async function translateNodes(nodes, apiKey, textStyle) {
     isLazyMode = false;
     return;
   }
-  
+
   console.log(`[Gemini Translator] Lazy translating ${nodes.length} nodes...`);
-  
+
   // Group into chunks
   const chunks = [];
   let currentChunk = '';
   let chunkMap = [];
-  
+
   nodes.forEach((entry) => {
     // Use trimmed version for translation
     const line = `[${entry.index}]${entry.trimmed}\n`;
-    
+
     if (currentChunk.length + line.length > 2000 && currentChunk.length > 0) {
       chunks.push({ text: currentChunk, map: chunkMap });
       currentChunk = line;
@@ -1663,11 +1733,11 @@ async function translateNodes(nodes, apiKey, textStyle) {
       chunkMap.push(entry);
     }
   });
-  
+
   if (currentChunk.length > 0) {
     chunks.push({ text: currentChunk, map: chunkMap });
   }
-  
+
   // Translate chunks
   for (const chunk of chunks) {
     // Check context validity before each chunk
@@ -1676,10 +1746,10 @@ async function translateNodes(nodes, apiKey, textStyle) {
       showNotification('Extension bị reload, vui lòng refresh trang', 'error');
       break;
     }
-    
+
     try {
       const translation = await translateWithCache(chunk.text, apiKey, textStyle);
-      
+
       // Filter: only keep lines starting with [number]
       const allLines = translation.split('\n');
       const lines = allLines
@@ -1692,20 +1762,20 @@ async function translateNodes(nodes, apiKey, textStyle) {
         if (match) {
           const index = parseInt(match[1]);
           let translation = match[2].trim();
-          
+
           const entry = chunk.map.find(e => e.index === index);
           if (entry) {
             // Allow empty for single chars
             if (!translation && entry.trimmed.length === 1) {
               translation = entry.trimmed;
             }
-            
+
             if (translation) {
               // Restore original whitespace
               let finalText = translation;
               if (entry.hasLeadingSpace) finalText = ' ' + finalText;
               if (entry.hasTrailingSpace) finalText = finalText + ' ';
-              
+
               entry.node.textContent = finalText;
               // Remove from pending
               const idx = pendingTranslations.findIndex(e => e.index === index);
@@ -1742,49 +1812,49 @@ function detectTextStyle(textMap) {
   if (!textMap || textMap.length === 0) {
     return { type: 'general', name: 'Văn bản thông thường', instruction: '' };
   }
-  
+
   // Combine sample text (first 1000 chars) - use trimmed if available
   const sampleText = textMap.slice(0, 50).map(e => e.trimmed || e.original).join(' ').substring(0, 1000).toLowerCase();
-  
+
   // Count indicators
   const indicators = {
     // Academic/Technical
     technical: (sampleText.match(/\b(algorithm|function|method|class|interface|database|api|protocol|implementation|architecture)\b/gi) || []).length,
     academic: (sampleText.match(/\b(research|study|analysis|conclusion|hypothesis|methodology|experiment|data|results|findings)\b/gi) || []).length,
-    
+
     // News/Journalism
     news: (sampleText.match(/\b(reported|according to|sources|announced|stated|officials|government|president|minister)\b/gi) || []).length,
-    
+
     // Business/Formal
     business: (sampleText.match(/\b(company|business|market|industry|investment|profit|revenue|strategy|management|executive)\b/gi) || []).length,
-    
+
     // Medical/Health
     medical: (sampleText.match(/\b(patient|treatment|disease|symptom|diagnosis|therapy|clinical|medical|health|doctor)\b/gi) || []).length,
-    
+
     // Legal
     legal: (sampleText.match(/\b(law|legal|court|attorney|contract|agreement|clause|regulation|compliance|jurisdiction)\b/gi) || []).length,
-    
+
     // Creative/Literary
     creative: (sampleText.match(/\b(story|character|novel|poem|imagination|adventure|journey|dream|beautiful|wonder)\b/gi) || []).length,
-    
+
     // Conversational/Casual
     casual: (sampleText.match(/\b(hey|cool|awesome|great|wow|yeah|okay|basically|actually|pretty much)\b/gi) || []).length,
-    
+
     // Educational/Tutorial
     tutorial: (sampleText.match(/\b(step|guide|tutorial|how to|learn|lesson|example|practice|exercise|instruction)\b/gi) || []).length
   };
-  
+
   // Find dominant style
   let maxCount = 0;
   let dominantStyle = 'general';
-  
+
   for (const [style, count] of Object.entries(indicators)) {
     if (count > maxCount && count >= 3) { // Minimum threshold
       maxCount = count;
       dominantStyle = style;
     }
   }
-  
+
   // Style definitions with translation instructions
   const styles = {
     technical: {
@@ -1838,6 +1908,6 @@ function detectTextStyle(textMap) {
       instruction: 'Translate naturally to Vietnamese.'
     }
   };
-  
+
   return styles[dominantStyle] || styles.general;
 }

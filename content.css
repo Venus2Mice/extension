@@ -24,6 +24,7 @@
     opacity: 0;
     transform: scale(0.9) translateY(-10px);
   }
+
   to {
     opacity: 1;
     transform: scale(1) translateY(0);
@@ -35,6 +36,7 @@
     opacity: 1;
     transform: scale(1) translateY(0);
   }
+
   to {
     opacity: 0;
     transform: scale(0.95) translateY(-5px);
@@ -176,6 +178,7 @@
     max-height: 0;
     padding: 0 14px;
   }
+
   to {
     opacity: 1;
     max-height: 1000px;
@@ -567,6 +570,36 @@
   font-weight: bold;
   color: #667eea;
   text-align: center;
+}
+
+.progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.pause-btn {
+  background: none;
+  border: 2px solid #667eea;
+  color: #667eea;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  padding: 0;
+  line-height: 1;
+}
+
+.pause-btn:hover {
+  background: #667eea;
+  color: white;
+  transform: scale(1.1);
 }
 
 /* Sticky Notification for Model and Writing Style */

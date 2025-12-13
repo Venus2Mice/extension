@@ -27,7 +27,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   try {
     // Ensure content script is injected
     await ensureContentScript(tab.id);
-    
+
     if (info.menuItemId === 'translatePage') {
       chrome.tabs.sendMessage(tab.id, {
         action: 'translatePage'
@@ -67,11 +67,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     });
     return true; // Keep the message channel open for async response
   }
-  
+
   if (request.action === 'translate') {
     translateText(request.text, request.apiKey, request.textStyle, request.currentUrl)
-      .then(result => sendResponse({ 
-        success: true, 
+      .then(result => sendResponse({
+        success: true,
         translation: result.translation,
         modelUsed: result.modelUsed,
         domainContext: result.domainContext
@@ -79,35 +79,35 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .catch(error => sendResponse({ success: false, error: error.message }));
     return true;
   }
-  
+
   if (request.action === 'testModels') {
     testAvailableModels(request.apiKey)
       .then(result => sendResponse(result))
       .catch(error => sendResponse({ success: false, error: error.message }));
     return true;
   }
-  
+
   if (request.action === 'analyzeDomain') {
     getDomainProfile(request.url, request.apiKey)
       .then(profile => sendResponse({ success: true, profile }))
       .catch(error => sendResponse({ success: false, error: error.message }));
     return true;
   }
-  
+
   if (request.action === 'getDomainStats') {
     getDomainCacheStats()
       .then(stats => sendResponse({ success: true, stats }))
       .catch(error => sendResponse({ success: false, error: error.message }));
     return true;
   }
-  
+
   if (request.action === 'clearDomainCache') {
     clearDomainCache()
       .then(() => sendResponse({ success: true }))
       .catch(error => sendResponse({ success: false, error: error.message }));
     return true;
   }
-  
+
   if (request.action === 'explainText') {
     explainTextSemantics(request.text, request.apiKey)
       .then(result => sendResponse({ success: true, explanation: result }))
@@ -135,13 +135,13 @@ async function ensureContentScript(tabId) {
       target: { tabId: tabId },
       files: ['content.js']
     });
-    
+
     // Also inject CSS
     await chrome.scripting.insertCSS({
       target: { tabId: tabId },
       files: ['content.css']
     });
-    
+
     // Wait a bit for script to initialize
     await new Promise(resolve => setTimeout(resolve, 100));
   }
@@ -197,7 +197,7 @@ async function translateText(text, apiKey, textStyle, currentUrl) {
   console.log('[Gemini Translator BG] Translating text:', text.substring(0, 100));
   console.log('[Gemini Translator BG] Text style:', textStyle ? textStyle.name : 'default');
   console.log('[Gemini Translator BG] Current URL:', currentUrl);
-  
+
   if (!apiKey) {
     console.error('[Gemini Translator BG] No API key provided');
     throw new Error('API key chưa được cấu hình. Vui lòng thêm Gemini API key trong popup.');
@@ -235,30 +235,30 @@ async function translateText(text, apiKey, textStyle, currentUrl) {
     'gemini-3-pro-preview',     // Paid only - no free tier
     'gemini-flash-lite-latest',
   ];
-  
+
   // Prioritize preferred model first, then others
   const models = [preferredModel, ...allModels.filter(m => m !== preferredModel)];
-  
+
   console.log('[Gemini Translator BG] Model priority:', models[0], '(preferred)');
-  
+
   let lastError = null;
   let quotaErrors = 0;
   let notFoundErrors = 0;
-  
+
   for (const model of models) {
     try {
       console.log('[Gemini Translator BG] Trying model:', model);
       const result = await tryTranslate(text, apiKey, model, textStyle, domainProfile);
       console.log('[Gemini Translator BG] ✓ Success with model:', model);
-      
+
       // Update preferred model if this one succeeded and it's not already preferred
       if (model !== preferredModel) {
         console.log('[Gemini Translator BG] Switching preferred model to:', model);
         chrome.storage.sync.set({ preferredModel: model });
       }
-      
-      return { 
-        translation: result, 
+
+      return {
+        translation: result,
         modelUsed: model,
         domainContext: domainProfile ? {
           domain: domainProfile.domain,
@@ -268,34 +268,34 @@ async function translateText(text, apiKey, textStyle, currentUrl) {
       };
     } catch (error) {
       const errorInfo = error.apiError || {};
-      
+
       // Handle 404 - Model not found (silently skip)
       if (errorInfo.isNotFound) {
         notFoundErrors++;
         console.log(`[Gemini Translator BG] ⊗ Model not available: ${model}`);
         continue;
       }
-      
+
       // Handle 429 - Quota exceeded
       if (errorInfo.isQuotaExceeded) {
         quotaErrors++;
         const retryAfter = errorInfo.retryAfter || 500;
-        console.log(`[Gemini Translator BG] ⚠ Quota exceeded for ${model}, waiting ${Math.round(retryAfter/1000)}s...`);
+        console.log(`[Gemini Translator BG] ⚠ Quota exceeded for ${model}, waiting ${Math.round(retryAfter / 1000)}s...`);
         await new Promise(resolve => setTimeout(resolve, Math.min(retryAfter, 2000))); // Max 2s wait
         lastError = error;
         continue;
       }
-      
+
       // Other errors
       console.warn(`[Gemini Translator BG] ✗ Error with ${model}: ${errorInfo.status || error.message}`);
       lastError = error;
     }
   }
-  
+
   // If all models failed, throw informative error
   console.error('[Gemini Translator BG] All models failed!');
   console.error(`[Gemini Translator BG] Summary: ${notFoundErrors} not found, ${quotaErrors} quota exceeded`);
-  
+
   if (quotaErrors > 0 && notFoundErrors === models.length - quotaErrors) {
     throw new Error('Tất cả models đã hết quota. Vui lòng đợi hoặc nâng cấp API key.');
   } else if (notFoundErrors === models.length) {
@@ -310,7 +310,7 @@ async function translateText(text, apiKey, textStyle, currentUrl) {
 // Test available models
 async function testAvailableModels(apiKey) {
   console.log('[Gemini Translator BG] Testing available models...');
-  
+
   const allModels = [
     'gemini-2.5-flash',
     'gemini-2.5-flash-lite',
@@ -321,11 +321,11 @@ async function testAvailableModels(apiKey) {
     'gemini-exp-1206',
     'gemini-3-pro-preview',     // Paid only - no free tier
   ];
-  
+
   const availableModels = [];
   const modelErrors = {};
   let workingModel = null;
-  
+
   // Test each model with a simple translation
   for (const model of allModels) {
     try {
@@ -348,10 +348,10 @@ async function testAvailableModels(apiKey) {
       }
     }
   }
-  
+
   console.log('[Gemini Translator BG] Available models:', availableModels);
   console.log('[Gemini Translator BG] Model errors:', modelErrors);
-  
+
   return {
     success: true,
     availableModels: availableModels,
@@ -370,17 +370,17 @@ function parseTranslationResponse(rawText) {
     } else if (cleanText.startsWith('```')) {
       cleanText = cleanText.replace(/^```\s*\n?/, '').replace(/\n?```\s*$/, '');
     }
-    
+
     // Try parse as JSON first
     if (cleanText.startsWith('{')) {
       try {
         const jsonData = JSON.parse(cleanText);
         const translations = jsonData.translations || jsonData;
-        
+
         // Convert back to [0]text\n[1]text format
         const lines = [];
         const keys = Object.keys(translations).sort((a, b) => parseInt(a) - parseInt(b));
-        
+
         // Fill missing indexes
         if (keys.length > 0) {
           const maxKey = Math.max(...keys.map(k => parseInt(k)));
@@ -394,24 +394,24 @@ function parseTranslationResponse(rawText) {
             }
           }
         }
-        
+
         console.log('[Gemini Translator BG] Parsed JSON successfully:', lines.length, 'lines');
         return lines.join('\n');
       } catch (e) {
         console.warn('[Gemini Translator BG] JSON parse failed, trying text format');
       }
     }
-    
+
     // Fallback: Treat as text format [0]...\n[1]...
     if (cleanText.includes('[0]') || cleanText.includes('[1]')) {
       console.log('[Gemini Translator BG] Using text format');
       return cleanText;
     }
-    
+
     // Last resort: return raw
     console.warn('[Gemini Translator BG] No valid format, returning raw text');
     return rawText;
-    
+
   } catch (error) {
     console.warn('[Gemini Translator BG] Parser error:', error.message);
     return rawText;
@@ -420,10 +420,10 @@ function parseTranslationResponse(rawText) {
 
 async function tryTranslate(text, apiKey, model, textStyle, domainProfile) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-  
+
   // Build instruction from textStyle and domainProfile
   let instruction = '';
-  
+
   // Add domain-specific context first (higher priority)
   if (domainProfile && !domainProfile.isFallback) {
     const domainInstruction = buildDomainInstruction(domainProfile);
@@ -431,12 +431,12 @@ async function tryTranslate(text, apiKey, model, textStyle, domainProfile) {
       instruction += domainInstruction + '\n';
     }
   }
-  
+
   // Add text style instruction
   if (textStyle && textStyle.type !== 'general') {
     instruction += textStyle.instruction + '\n';
   }
-  
+
   const promptText = `${instruction}Translate ALL text to Vietnamese (Tiếng Việt).
 
 Format: Keep [number] prefix exactly as shown
@@ -455,7 +455,7 @@ ${text}`;
   // Gemini 3 models require temperature=1.0, other models work better with lower temperature
   const isGemini3Model = model.includes('gemini-3');
   const temperature = isGemini3Model ? 1.0 : 0.2;
-  
+
   const requestBody = {
     contents: [{
       parts: [{
@@ -464,7 +464,7 @@ ${text}`;
     }],
     generationConfig: {
       temperature: temperature,
-      maxOutputTokens: 8192,
+      maxOutputTokens: 65536,
     },
     safetySettings: [
       {
@@ -485,10 +485,10 @@ ${text}`;
       }
     ]
   };
-  
+
   console.log('[Gemini Translator BG] Calling API URL:', url.replace(apiKey, 'KEY_HIDDEN'));
   console.log('[Gemini Translator BG] Using temperature:', temperature, 'for model:', model);
-  
+
   try {
     const response = await fetch(url, {
       method: 'POST',
@@ -503,7 +503,7 @@ ${text}`;
     if (!response.ok) {
       const errorText = await response.text();
       const errorInfo = parseApiError(errorText, response.status);
-      
+
       // Log concisely based on error type
       if (errorInfo.isNotFound) {
         console.log(`[Gemini Translator BG] Model not found (404): ${model}`);
@@ -512,7 +512,7 @@ ${text}`;
       } else {
         console.error(`[Gemini Translator BG] API error ${errorInfo.code}:`, errorInfo.message.substring(0, 150));
       }
-      
+
       const error = new Error(errorInfo.message);
       error.apiError = errorInfo;
       throw error;
@@ -520,35 +520,35 @@ ${text}`;
 
     const data = await response.json();
     console.log('[Gemini Translator BG] API response data:', JSON.stringify(data).substring(0, 300));
-    
+
     // Check for content blocking
     if (data.promptFeedback && data.promptFeedback.blockReason) {
       const blockReason = data.promptFeedback.blockReason;
       console.error(`[Gemini Translator BG] Content blocked: ${blockReason}`);
       throw new Error(`Gemini blocked content (${blockReason}). Vui lòng thử lại hoặc chọn nội dung khác.`);
     }
-    
+
     // Check for various response formats
     if (data.candidates && data.candidates.length > 0) {
       const candidate = data.candidates[0];
-      
+
       // Check if response was truncated
       if (candidate.finishReason === 'MAX_TOKENS') {
         console.warn('[Gemini Translator BG] Response truncated due to MAX_TOKENS');
         throw new Error('Response too long - text được cắt ngắn, thử giảm số lượng text');
       }
-      
+
       if (candidate.content && candidate.content.parts && candidate.content.parts.length > 0) {
         const rawText = candidate.content.parts[0].text;
         console.log('[Gemini Translator BG] Raw response:', rawText.substring(0, 200));
-        
+
         // Parse JSON response
         const translation = parseTranslationResponse(rawText);
         console.log('[Gemini Translator BG] Translation successful:', translation.substring(0, 100));
         return translation;
       }
     }
-    
+
     console.error('[Gemini Translator BG] Invalid response format:', JSON.stringify(data));
     throw new Error('Không thể dịch văn bản - Invalid response format');
   } catch (error) {
@@ -560,7 +560,7 @@ ${text}`;
 // Explain text semantics using Gemini API
 async function explainTextSemantics(text, apiKey) {
   console.log('[Gemini Translator BG] Explaining text semantics...');
-  
+
   const models = [
     'gemini-2.5-flash',
     'gemini-2.5-flash-lite',
@@ -606,7 +606,7 @@ Trả lời bằng Tiếng Việt, rõ ràng và dễ hiểu.`;
     try {
       console.log(`[Gemini Translator BG] Trying model: ${modelName}`);
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-      
+
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -641,18 +641,18 @@ Trả lời bằng Tiếng Việt, rõ ràng và dễ hiểu.`;
       }
 
       const data = JSON.parse(responseText);
-      
+
       if (data.candidates && data.candidates.length > 0) {
         const candidate = data.candidates[0];
         if (candidate.content && candidate.content.parts && candidate.content.parts.length > 0) {
           const explanation = candidate.content.parts[0].text;
           console.log(`[Gemini Translator BG] ✓ Explanation success with model: ${modelName}`);
-          
+
           // Update preferred model if different from current
           if (modelName !== preferredModel) {
             chrome.storage.sync.set({ preferredModel: modelName });
           }
-          
+
           return explanation;
         }
       }

@@ -3,26 +3,35 @@ document.addEventListener('DOMContentLoaded', () => {
   loadApiKey();
   loadCacheInfo();
   loadDomainStats();
-  
+
   // Save API Key
   document.getElementById('saveApiKey').addEventListener('click', saveApiKey);
-  
+
   // Test connection
   document.getElementById('testConnection').addEventListener('click', testConnection);
-  
+
   // Translate current page
   document.getElementById('translateCurrentPage').addEventListener('click', translateCurrentPage);
-  
+
   // Restore original page
   document.getElementById('restorePage').addEventListener('click', restorePage);
-  
+
   // Clear cache
   document.getElementById('clearCache').addEventListener('click', clearCache);
-  
+
   // Domain management
   document.getElementById('refreshDomains').addEventListener('click', loadDomainStats);
   document.getElementById('clearDomains').addEventListener('click', clearDomainCache);
-  
+
+  // Auto-save model selection
+  document.getElementById('preferredModel').addEventListener('change', () => {
+    const preferredModel = document.getElementById('preferredModel').value;
+    chrome.storage.sync.set({ preferredModel }, () => {
+      console.log('Auto-saved preferredModel:', preferredModel);
+      showStatus(`✓ Đã lưu model: ${preferredModel}`, 'success');
+    });
+  });
+
   // Allow Enter key to save API key
   document.getElementById('apiKey').addEventListener('keypress', (e) => {
     if (e.key === 'Enter') {
@@ -47,15 +56,15 @@ function loadApiKey() {
 function saveApiKey() {
   const apiKey = document.getElementById('apiKey').value.trim();
   const preferredModel = document.getElementById('preferredModel').value;
-  
+
   if (!apiKey) {
     showStatus('Vui lòng nhập API key', 'error');
     return;
   }
-  
-  chrome.storage.sync.set({ 
+
+  chrome.storage.sync.set({
     geminiApiKey: apiKey,
-    preferredModel: preferredModel 
+    preferredModel: preferredModel
   }, () => {
     console.log('Saved preferredModel:', preferredModel);
     showStatus(`✓ Đã lưu! Model ưu tiên: ${preferredModel}`, 'success');
@@ -66,23 +75,23 @@ function saveApiKey() {
 async function translateCurrentPage() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    
+
     if (!tab) {
       showStatus('Không tìm thấy tab đang hoạt động', 'error');
       return;
     }
-    
+
     // Check if API key exists
     chrome.storage.sync.get(['geminiApiKey'], async (result) => {
       if (!result.geminiApiKey) {
         showStatus('Vui lòng cấu hình API key trước', 'error');
         return;
       }
-      
+
       try {
         // Ensure content script is injected
         await ensureContentScript(tab.id);
-        
+
         chrome.tabs.sendMessage(tab.id, { action: 'translatePageFull' }, (response) => {
           if (chrome.runtime.lastError) {
             showStatus('Lỗi: ' + chrome.runtime.lastError.message, 'error');
@@ -104,14 +113,14 @@ async function translateCurrentPage() {
 async function restorePage() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    
+
     if (!tab) {
       showStatus('Không tìm thấy tab đang hoạt động', 'error');
       return;
     }
-    
+
     await ensureContentScript(tab.id);
-    
+
     chrome.tabs.sendMessage(tab.id, { action: 'restoreOriginal' }, (response) => {
       if (chrome.runtime.lastError) {
         showStatus('Lỗi: ' + chrome.runtime.lastError.message, 'error');
@@ -141,13 +150,13 @@ async function ensureContentScript(tabId) {
       target: { tabId: tabId },
       files: ['content.js']
     });
-    
+
     // Also inject CSS
     await chrome.scripting.insertCSS({
       target: { tabId: tabId },
       files: ['content.css']
     });
-    
+
     // Wait a bit for script to initialize
     await new Promise(resolve => setTimeout(resolve, 100));
   }
@@ -159,7 +168,7 @@ function showStatus(message, type = 'info') {
   statusDiv.textContent = message;
   statusDiv.className = 'status ' + type;
   statusDiv.style.display = 'block';
-  
+
   setTimeout(() => {
     statusDiv.style.display = 'none';
   }, 3000);
@@ -170,10 +179,10 @@ async function loadCacheInfo() {
   try {
     const result = await chrome.storage.local.get(['translationCache', 'cacheTimestamp']);
     const cacheInfo = document.getElementById('cacheInfo');
-    
+
     if (result.translationCache) {
       const count = Object.keys(result.translationCache).length;
-      const age = result.cacheTimestamp ? Math.round((Date.now() - result.cacheTimestamp) / (24*60*60*1000)) : 0;
+      const age = result.cacheTimestamp ? Math.round((Date.now() - result.cacheTimestamp) / (24 * 60 * 60 * 1000)) : 0;
       cacheInfo.textContent = `${count} bản dịch đã cache (${age} ngày)`;
     } else {
       cacheInfo.textContent = 'Chưa có cache';
@@ -187,46 +196,46 @@ async function loadCacheInfo() {
 // Test connection to available models
 async function testConnection() {
   const apiKey = document.getElementById('apiKey').value.trim();
-  
+
   if (!apiKey) {
     showStatus('Vui lòng nhập API key trước', 'error');
     return;
   }
-  
+
   showStatus('Đang kiểm tra các model...', 'info');
-  
+
   const testButton = document.getElementById('testConnection');
   testButton.disabled = true;
   testButton.textContent = '⏳ Đang kiểm tra...';
-  
+
   try {
     const result = await chrome.runtime.sendMessage({
       action: 'testModels',
       apiKey: apiKey
     });
-    
+
     if (result.success) {
       const availableModels = result.availableModels;
       const modelErrors = result.modelErrors || {};
       const workingModel = result.workingModel;
-      
+
       // Update the select dropdown to show only available models
       const select = document.getElementById('preferredModel');
       const currentValue = select.value;
-      
+
       // Store all options
       const allOptions = Array.from(select.options).map(opt => ({
         value: opt.value,
         text: opt.text.replace(/ [✓✗].*$/, '') // Remove existing markers
       }));
-      
+
       // Clear and repopulate
       select.innerHTML = '';
-      
+
       allOptions.forEach(option => {
         const opt = document.createElement('option');
         opt.value = option.value;
-        
+
         if (availableModels.includes(option.value)) {
           opt.text = option.text + ' ✓';
           opt.style.color = 'green';
@@ -235,17 +244,17 @@ async function testConnection() {
           opt.text = option.text + ` ✗ (${errorType})`;
           opt.style.color = 'gray';
         }
-        
+
         select.appendChild(opt);
       });
-      
+
       // Restore or set to working model
       if (availableModels.includes(currentValue)) {
         select.value = currentValue;
       } else {
         select.value = workingModel;
       }
-      
+
       showStatus(`✓ Tìm thấy ${availableModels.length} model khả dụng!`, 'success');
     } else {
       showStatus('Lỗi: ' + result.error, 'error');
@@ -263,12 +272,12 @@ async function clearCache() {
   if (!confirm('Bạn có chắc muốn xóa toàn bộ cache dịch? Việc này sẽ làm chậm lần dịch tiếp theo.')) {
     return;
   }
-  
+
   try {
     await chrome.storage.local.remove(['translationCache', 'cacheTimestamp']);
     showStatus('✓ Đã xóa cache thành công!', 'success');
     loadCacheInfo();
-    
+
     // Also notify content scripts to clear their in-memory cache
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab) {
@@ -288,20 +297,20 @@ async function loadDomainStats() {
   try {
     const response = await chrome.runtime.sendMessage({ action: 'getDomainStats' });
     const statsDiv = document.getElementById('domainStats');
-    
+
     if (response.success && response.stats) {
       const stats = response.stats;
-      
+
       if (stats.totalDomains === 0) {
         statsDiv.innerHTML = '<div style="color: #999;">Chưa có domain nào được phân tích</div>';
       } else {
         let html = `<div style="margin-bottom: 8px;"><strong>${stats.totalDomains} domains</strong> - ${stats.totalUsage} lần sử dụng</div>`;
-        
+
         // Show top 5 domains
         const topDomains = stats.domains
           .sort((a, b) => b.usageCount - a.usageCount)
           .slice(0, 5);
-        
+
         html += '<div style="font-size: 12px; max-height: 120px; overflow-y: auto;">';
         for (const d of topDomains) {
           html += `
@@ -314,7 +323,7 @@ async function loadDomainStats() {
           `;
         }
         html += '</div>';
-        
+
         statsDiv.innerHTML = html;
       }
     } else {
@@ -331,10 +340,10 @@ async function clearDomainCache() {
   if (!confirm('Xóa tất cả domain profiles? AI sẽ phải học lại văn phong các trang web.')) {
     return;
   }
-  
+
   try {
     const response = await chrome.runtime.sendMessage({ action: 'clearDomainCache' });
-    
+
     if (response.success) {
       showStatus('✓ Đã xóa domain cache!', 'success');
       loadDomainStats();
