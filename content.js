@@ -724,6 +724,12 @@ async function handleTranslatePageFull() {
     console.log('[Gemini Translator] Translation queue finished.');
     isTranslated = true;
     hideProgressBar();
+
+    // Auto-hide sticky notification after 3 seconds on success
+    setTimeout(() => {
+      hideStickyNotification();
+    }, 3000);
+
     showNotification('Đã dịch toàn bộ trang thành công!', 'success');
 
   } catch (error) {
@@ -735,6 +741,7 @@ async function handleTranslatePageFull() {
       showNotification('Lỗi khi dịch: ' + error.message, 'error');
     }
     hideProgressBar();
+    hideStickyNotification(); // Hide on error too
   } finally {
     hideLoadingIndicator();
   }
@@ -779,6 +786,22 @@ async function processChunkWithRetry(chunk, index, totalChunks, apiKey, textStyl
       return true; // Success
 
     } catch (error) {
+      // Check for critical errors that should stop everything immediately
+      const isCriticalError = error.message && (
+        error.message.includes('429') ||
+        error.message.includes('quota') ||
+        error.message.includes('RESOURCE_EXHAUSTED') ||
+        error.message.includes('rate limit')
+      );
+
+      if (isCriticalError) {
+        // FAIL-FAST: Stop immediately on quota/rate limit errors
+        fatalErrorOccurred = true;
+        hideStickyNotification();
+        showNotification('⛔ Đã hết quota API (429). Dừng dịch ngay!', 'error');
+        throw error;
+      }
+
       // Check for Response too long (Permanent Error -> Fail Fast)
       if (error.message && error.message.includes('Response too long')) {
         throw error; // Fatal
@@ -1050,17 +1073,41 @@ function handleStreamError(chunkIndex, errorMessage) {
     streamingChunks[chunkIndex].status = 'error';
   }
 
-  // Show error but don't stop other chunks
+  // Check for critical errors that should stop everything immediately
+  const isCriticalError =
+    errorMessage.includes('429') ||
+    errorMessage.includes('quota') ||
+    errorMessage.includes('RESOURCE_EXHAUSTED') ||
+    errorMessage.includes('rate limit');
+
+  if (isCriticalError) {
+    // FAIL-FAST: Stop immediately on quota/rate limit errors
+    fatalErrorOccurred = true;
+    isStreamingMode = false;
+
+    hideProgressBar();
+    hideStreamingIndicator();
+    hideStickyNotification();
+
+    showNotification('⛔ Đã hết quota API (429). Dừng dịch ngay!', 'error');
+    console.error('[Gemini Translator] Critical error - stopping all translation:', errorMessage);
+    return;
+  }
+
+  // Show error but continue other chunks for non-critical errors
   showNotification(`Lỗi chunk ${chunkIndex + 1}: ${errorMessage}`, 'error');
 
-  // If too many errors, stop
+  // If too many non-critical errors, stop
   const errorCount = streamingChunks.filter(c => c.status === 'error').length;
   if (errorCount > streamingTotalChunks / 2) {
     fatalErrorOccurred = true;
-    showNotification('Quá nhiều lỗi, dừng dịch streaming', 'error');
+    isStreamingMode = false;
+
     hideProgressBar();
     hideStreamingIndicator();
-    isStreamingMode = false;
+    hideStickyNotification();
+
+    showNotification('Quá nhiều lỗi, dừng dịch streaming', 'error');
   }
 }
 
@@ -1075,6 +1122,11 @@ function finishStreamingTranslation(modelUsed) {
 
   hideProgressBar();
   hideStreamingIndicator();
+
+  // Auto-hide sticky notification after 3 seconds
+  setTimeout(() => {
+    hideStickyNotification();
+  }, 3000);
 
   const successCount = streamingChunks.filter(c => c.status === 'completed').length;
   const errorCount = streamingChunks.filter(c => c.status === 'error').length;
@@ -1751,6 +1803,17 @@ function showStickyNotification(modelName, textStyle) {
   setTimeout(() => {
     notification.classList.add('show');
   }, 10);
+}
+
+/**
+ * Hide sticky notification with fade-out animation
+ */
+function hideStickyNotification() {
+  const notification = document.getElementById('gemini-translator-sticky-notification');
+  if (notification) {
+    notification.classList.add('fade-out');
+    setTimeout(() => notification.remove(), 300);
+  }
 }
 
 // Show loading indicator
