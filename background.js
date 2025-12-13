@@ -126,6 +126,38 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  // ============================================================================
+  // CONTENT FILTER HANDLERS
+  // ============================================================================
+
+  if (request.action === 'checkContentFilter') {
+    isContentBlocked(request.url, request.textContent || '')
+      .then(result => sendResponse({ success: true, ...result }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+
+  if (request.action === 'addBlockedDomain') {
+    addCustomBlockedDomain(request.domain)
+      .then(added => sendResponse({ success: true, added }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+
+  if (request.action === 'removeBlockedDomain') {
+    removeCustomBlockedDomain(request.domain)
+      .then(removed => sendResponse({ success: true, removed }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+
+  if (request.action === 'getBlockedDomains') {
+    getCustomBlockedDomains()
+      .then(domains => sendResponse({ success: true, domains }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+
   if (request.action === 'explainText') {
     explainTextSemantics(request.text, request.apiKey)
       .then(result => sendResponse({ success: true, explanation: result }))
@@ -164,18 +196,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   // ============================================================================
-  // SELF-LEARNING HANDLERS
+  // SELF-LEARNING HANDLERS (simplified - no vocabulary)
   // ============================================================================
 
   if (request.action === 'recordFeedback') {
     recordFeedback(request.url, request.isPositive, request.comment)
-      .then(() => sendResponse({ success: true }))
-      .catch(error => sendResponse({ success: false, error: error.message }));
-    return true;
-  }
-
-  if (request.action === 'learnVocabulary') {
-    learnVocabulary(request.url, request.vocabPairs)
       .then(() => sendResponse({ success: true }))
       .catch(error => sendResponse({ success: false, error: error.message }));
     return true;
@@ -191,13 +216,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'updateGuidelines') {
     updateRefinedGuidelines(request.url, request.guidelines)
       .then(() => sendResponse({ success: true }))
-      .catch(error => sendResponse({ success: false, error: error.message }));
-    return true;
-  }
-
-  if (request.action === 'getLearnedVocabulary') {
-    getLearnedVocabulary(request.url)
-      .then(vocab => sendResponse({ success: true, vocabulary: vocab }))
       .catch(error => sendResponse({ success: false, error: error.message }));
     return true;
   }

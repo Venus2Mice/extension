@@ -5,6 +5,193 @@ const DOMAIN_CACHE_KEY = 'domainStyleProfiles';
 const DOMAIN_CACHE_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
 const MAX_DOMAINS = 50; // Limit cache size
 
+// ============================================================================
+// CONTENT FILTER - Block prohibited content
+// ============================================================================
+
+// Blocked domain patterns (explicit adult/illegal sites)
+const BLOCKED_DOMAIN_PATTERNS = [
+  /porn/i, /xxx/i, /xnxx/i, /xvideos/i, /xhamster/i, /pornhub/i,
+  /redtube/i, /youporn/i, /tube8/i, /spankbang/i, /brazzers/i,
+  /sex/i, /hentai/i, /nsfw/i, /adult/i, /18\+/i,
+  /nazi/i, /fascis/i, /whitesuprem/i, /neonazi/i,
+  /gore/i, /snuff/i, /darkweb/i, /darknet/i
+];
+
+// Blocked keywords in URL path or text content
+const BLOCKED_KEYWORDS = [
+  // Adult content
+  'porn', 'xxx', 'sex', 'hentai', 'nsfw', 'nude', 'naked', 'erotic',
+  'adult-only', 'fetish', 'camgirl', 'onlyfans', 'escort',
+  // Extremism
+  'nazi', 'fascist', 'white-supremacy', 'neo-nazi', 'hitler', 'swastika',
+  'holocaust-denial', 'ethnic-cleansing', 'genocide-support',
+  // Violence
+  'gore', 'snuff', 'torture', 'terrorism', 'bomb-making',
+  // Illegal
+  'drug-sale', 'weapon-sale', 'human-trafficking', 'child-abuse'
+];
+
+// Safe categories that should never be blocked
+const SAFE_CATEGORIES = [
+  'news', 'education', 'academic', 'documentation', 'government',
+  'wikipedia', 'encyclopedia', 'dictionary', 'reference'
+];
+
+/**
+ * Check if a URL/domain should be blocked from translation
+ * @param {string} url - Full URL to check
+ * @returns {Object} { blocked: boolean, reason: string }
+ */
+function checkContentFilter(url) {
+  try {
+    const urlObj = new URL(url);
+    const domain = urlObj.hostname.toLowerCase();
+    const fullPath = (urlObj.pathname + urlObj.search).toLowerCase();
+
+    // Check blocked domain patterns
+    for (const pattern of BLOCKED_DOMAIN_PATTERNS) {
+      if (pattern.test(domain)) {
+        return {
+          blocked: true,
+          reason: `Domain bị chặn: ${domain} (nội dung cấm)`,
+          category: 'domain_blocked'
+        };
+      }
+    }
+
+    // Check blocked keywords in URL
+    for (const keyword of BLOCKED_KEYWORDS) {
+      if (domain.includes(keyword) || fullPath.includes(keyword)) {
+        return {
+          blocked: true,
+          reason: `URL chứa từ khóa bị chặn: "${keyword}"`,
+          category: 'keyword_blocked'
+        };
+      }
+    }
+
+    return { blocked: false, reason: null, category: null };
+
+  } catch (error) {
+    console.error('[Content Filter] Error checking URL:', error);
+    return { blocked: false, reason: null, category: null };
+  }
+}
+
+/**
+ * Check if page content contains prohibited material
+ * This is a lightweight check on visible text
+ * @param {string} textContent - Text content from the page
+ * @returns {Object} { blocked: boolean, reason: string }
+ */
+function checkTextContent(textContent) {
+  if (!textContent || textContent.length < 100) {
+    return { blocked: false, reason: null };
+  }
+
+  const lowerText = textContent.toLowerCase().substring(0, 5000); // Check first 5000 chars
+
+  // Critical keywords that indicate prohibited content
+  const criticalPatterns = [
+    /\b(nazi|fascist|white\s*supremac|neo-?nazi)\b/i,
+    /\b(swastika|holocaust\s*denial|ethnic\s*cleansing)\b/i,
+    /\b(child\s*porn|pedophil|csam)\b/i,
+    /\b(terrorism|bomb\s*making|weapon\s*instruction)\b/i
+  ];
+
+  for (const pattern of criticalPatterns) {
+    if (pattern.test(lowerText)) {
+      return {
+        blocked: true,
+        reason: 'Phát hiện nội dung cấm trong trang',
+        category: 'content_blocked'
+      };
+    }
+  }
+
+  return { blocked: false, reason: null };
+}
+
+/**
+ * Get user's custom blocked domains from storage
+ */
+async function getCustomBlockedDomains() {
+  try {
+    const result = await chrome.storage.sync.get(['customBlockedDomains']);
+    return result.customBlockedDomains || [];
+  } catch (error) {
+    return [];
+  }
+}
+
+/**
+ * Add a domain to custom blocked list
+ */
+async function addCustomBlockedDomain(domain) {
+  try {
+    const current = await getCustomBlockedDomains();
+    if (!current.includes(domain)) {
+      current.push(domain);
+      await chrome.storage.sync.set({ customBlockedDomains: current });
+      console.log(`[Content Filter] Added ${domain} to blocked list`);
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error('[Content Filter] Error adding blocked domain:', error);
+    return false;
+  }
+}
+
+/**
+ * Remove a domain from custom blocked list
+ */
+async function removeCustomBlockedDomain(domain) {
+  try {
+    const current = await getCustomBlockedDomains();
+    const index = current.indexOf(domain);
+    if (index > -1) {
+      current.splice(index, 1);
+      await chrome.storage.sync.set({ customBlockedDomains: current });
+      console.log(`[Content Filter] Removed ${domain} from blocked list`);
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error('[Content Filter] Error removing blocked domain:', error);
+    return false;
+  }
+}
+
+/**
+ * Full content filter check including custom domains
+ */
+async function isContentBlocked(url, textContent = '') {
+  // Check URL/domain first
+  const urlCheck = checkContentFilter(url);
+  if (urlCheck.blocked) return urlCheck;
+
+  // Check custom blocked domains
+  const domain = extractDomain(url);
+  const customBlocked = await getCustomBlockedDomains();
+  if (customBlocked.includes(domain)) {
+    return {
+      blocked: true,
+      reason: `Domain trong danh sách chặn của bạn: ${domain}`,
+      category: 'custom_blocked'
+    };
+  }
+
+  // Check text content if provided
+  if (textContent) {
+    const textCheck = checkTextContent(textContent);
+    if (textCheck.blocked) return textCheck;
+  }
+
+  return { blocked: false, reason: null, category: null };
+}
+
 /**
  * Analyze a domain using Gemini with Google Search + URL Context tools
  * @param {string} domain - Domain to analyze (e.g., 'wikipedia.org')
@@ -129,8 +316,7 @@ Return ONLY a valid JSON object (no extra text):
       sampleUrl: url,
       usageCount: 0,
 
-      // Self-learning fields
-      learnedVocabulary: {},
+      // Self-learning fields (simplified - no vocabulary to save storage)
       userFeedback: {
         positive: 0,
         negative: 0,
@@ -167,15 +353,14 @@ function createFallbackProfile(domain, url) {
     usageCount: 0,
     isFallback: true,
 
-    // Self-learning fields
-    learnedVocabulary: {},      // { "original": "translated" }
+    // Self-learning fields (simplified - no vocabulary to save storage)
     userFeedback: {
       positive: 0,
       negative: 0,
       lastFeedback: null
     },
-    visitedUrls: [url],          // Track visited URLs for better analysis
-    refinedGuidelines: '',       // User-adjusted guidelines
+    visitedUrls: [url],
+    refinedGuidelines: '',
     lastUpdated: Date.now()
   };
 }
@@ -297,13 +482,6 @@ function buildDomainInstruction(profile) {
     instruction += `\nCommon Themes: ${profile.themes.join(', ')}`;
   }
 
-  // Include learned vocabulary hints (top 10 most useful)
-  if (profile.learnedVocabulary && Object.keys(profile.learnedVocabulary).length > 0) {
-    const vocabEntries = Object.entries(profile.learnedVocabulary).slice(0, 10);
-    const vocabHints = vocabEntries.map(([orig, trans]) => `"${orig}" → "${trans}"`).join(', ');
-    instruction += `\nLearned Terms: ${vocabHints}`;
-  }
-
   // Add feedback context
   if (profile.userFeedback) {
     const score = (profile.userFeedback.positive || 0) - (profile.userFeedback.negative || 0);
@@ -342,7 +520,6 @@ async function getDomainCacheStats() {
       domain: d,
       type: cache[d].websiteType,
       usageCount: cache[d].usageCount || 0,
-      vocabCount: Object.keys(cache[d].learnedVocabulary || {}).length,
       feedbackScore: (cache[d].userFeedback?.positive || 0) - (cache[d].userFeedback?.negative || 0),
       age: Math.round((Date.now() - cache[d].analyzedAt) / (24 * 60 * 60 * 1000))
     }))
@@ -352,59 +529,6 @@ async function getDomainCacheStats() {
 // ============================================================================
 // SELF-LEARNING FUNCTIONS
 // ============================================================================
-
-/**
- * Learn vocabulary from translation pairs
- * Saves domain-specific translations for future reference
- * @param {string} url - Current URL
- * @param {Object} vocabPairs - { "original": "translated", ... }
- */
-async function learnVocabulary(url, vocabPairs) {
-  try {
-    const domain = extractDomain(url);
-    if (!domain || !vocabPairs || Object.keys(vocabPairs).length === 0) return;
-
-    const result = await chrome.storage.local.get([DOMAIN_CACHE_KEY]);
-    const cache = result[DOMAIN_CACHE_KEY] || {};
-
-    if (!cache[domain]) {
-      console.log(`[Domain Learner] No profile for ${domain}, skipping vocabulary learning`);
-      return;
-    }
-
-    const profile = cache[domain];
-
-    // Initialize if needed
-    if (!profile.learnedVocabulary) {
-      profile.learnedVocabulary = {};
-    }
-
-    // Merge new vocabulary (limit to 200 entries per domain)
-    const MAX_VOCAB = 200;
-    const existingCount = Object.keys(profile.learnedVocabulary).length;
-
-    let added = 0;
-    for (const [original, translated] of Object.entries(vocabPairs)) {
-      // Only learn meaningful terms (3+ chars, not just numbers/punctuation)
-      if (original.length >= 3 && translated.length >= 2 && /[a-zA-Z\u4e00-\u9fff]/.test(original)) {
-        if (existingCount + added < MAX_VOCAB) {
-          profile.learnedVocabulary[original.toLowerCase()] = translated;
-          added++;
-        }
-      }
-    }
-
-    if (added > 0) {
-      profile.lastUpdated = Date.now();
-      cache[domain] = profile;
-      await chrome.storage.local.set({ [DOMAIN_CACHE_KEY]: cache });
-      console.log(`[Domain Learner] Learned ${added} new terms for ${domain} (total: ${Object.keys(profile.learnedVocabulary).length})`);
-    }
-
-  } catch (error) {
-    console.error('[Domain Learner] Error learning vocabulary:', error);
-  }
-}
 
 /**
  * Record user feedback on translation quality
@@ -521,51 +645,4 @@ async function updateRefinedGuidelines(url, guidelines) {
   } catch (error) {
     console.error('[Domain Guidelines] Error updating guidelines:', error);
   }
-}
-
-/**
- * Get learned vocabulary for a domain
- * @param {string} url - Current URL
- * @returns {Object} Vocabulary map { original: translated }
- */
-async function getLearnedVocabulary(url) {
-  try {
-    const domain = extractDomain(url);
-    if (!domain) return {};
-
-    const result = await chrome.storage.local.get([DOMAIN_CACHE_KEY]);
-    const cache = result[DOMAIN_CACHE_KEY] || {};
-
-    return cache[domain]?.learnedVocabulary || {};
-  } catch (error) {
-    console.error('[Domain Learner] Error getting vocabulary:', error);
-    return {};
-  }
-}
-
-/**
- * Extract key terms from translation for learning
- * @param {string} originalText - Source text
- * @param {string} translatedText - Translated text
- * @returns {Object} Vocabulary pairs to learn
- */
-function extractVocabularyPairs(originalText, translatedText) {
-  const pairs = {};
-
-  // Extract capitalized terms (likely proper nouns or important terms)
-  const capitalizedPattern = /\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]+)*)\b/g;
-  const originalTerms = originalText.match(capitalizedPattern) || [];
-
-  // Extract Chinese/Vietnamese terms from translation
-  const asianPattern = /[\u4e00-\u9fff\u00C0-\u1EF9]{2,}/g;
-  const translatedTerms = translatedText.match(asianPattern) || [];
-
-  // Simple pairing based on position (basic heuristic)
-  originalTerms.slice(0, 10).forEach((term, i) => {
-    if (translatedTerms[i] && term.length >= 3) {
-      pairs[term] = translatedTerms[i];
-    }
-  });
-
-  return pairs;
 }

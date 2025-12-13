@@ -216,6 +216,22 @@ async function handleTranslatePage() {
     return;
   }
 
+  // Check content filter FIRST
+  try {
+    const filterResult = await chrome.runtime.sendMessage({
+      action: 'checkContentFilter',
+      url: window.location.href
+    });
+
+    if (filterResult.blocked) {
+      showNotification(`⛔ ${filterResult.reason}`, 'error');
+      console.warn('[Gemini Translator] Content blocked:', filterResult.reason);
+      return;
+    }
+  } catch (error) {
+    console.error('[Gemini Translator] Content filter check failed:', error);
+  }
+
   showLoadingIndicator();
 
   try {
@@ -558,6 +574,22 @@ async function handleTranslatePageFull() {
     return;
   }
 
+  // Check content filter FIRST
+  try {
+    const filterResult = await chrome.runtime.sendMessage({
+      action: 'checkContentFilter',
+      url: window.location.href
+    });
+
+    if (filterResult.blocked) {
+      showNotification(`⛔ ${filterResult.reason}`, 'error');
+      console.warn('[Gemini Translator] Content blocked:', filterResult.reason);
+      return;
+    }
+  } catch (error) {
+    console.error('[Gemini Translator] Content filter check failed:', error);
+  }
+
   showLoadingIndicator();
   showProgressBar();
 
@@ -873,6 +905,22 @@ async function handleTranslatePageStreaming() {
     console.log('[Gemini Translator] Page already translated, restoring original...');
     restoreOriginalContent();
     return;
+  }
+
+  // Check content filter FIRST
+  try {
+    const filterResult = await chrome.runtime.sendMessage({
+      action: 'checkContentFilter',
+      url: window.location.href
+    });
+
+    if (filterResult.blocked) {
+      showNotification(`⛔ ${filterResult.reason}`, 'error');
+      console.warn('[Gemini Translator] Content blocked:', filterResult.reason);
+      return;
+    }
+  } catch (error) {
+    console.error('[Gemini Translator] Content filter check failed:', error);
   }
 
   showLoadingIndicator();
@@ -1415,13 +1463,6 @@ function showTranslationPopup(original, translation, selectionRect) {
       thumbsUpBtn.disabled = true;
       thumbsDownBtn.disabled = true;
       showNotification('Cảm ơn phản hồi! Đã ghi nhận.', 'success');
-
-      // Also learn vocabulary from this translation
-      chrome.runtime.sendMessage({
-        action: 'learnVocabulary',
-        url: window.location.href,
-        vocabPairs: extractVocabFromTranslation(original, translation)
-      });
     });
   }
 
@@ -1949,36 +1990,6 @@ function escapeHtml(text) {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-/**
- * Extract vocabulary pairs from a translation for learning
- * @param {string} original - Original text
- * @param {string} translated - Translated text
- * @returns {Object} Vocabulary pairs { original: translated }
- */
-function extractVocabFromTranslation(original, translated) {
-  const pairs = {};
-
-  // Extract capitalized terms (likely proper nouns/important terms)
-  const capitalizedPattern = /\b([A-Z][a-zA-Z]{2,})\b/g;
-  const originalTerms = original.match(capitalizedPattern) || [];
-
-  // Extract meaningful Vietnamese phrases (3+ chars, contains Vietnamese)
-  const vietnamesePattern = /[\u00C0-\u1EF9a-zA-Z]{3,}/g;
-  const translatedTerms = translated.match(vietnamesePattern) || [];
-
-  // Simple heuristic pairing
-  const uniqueOriginal = [...new Set(originalTerms)].slice(0, 5);
-
-  uniqueOriginal.forEach((term, i) => {
-    if (translatedTerms[i] && term.length >= 3 && translatedTerms[i].length >= 2) {
-      pairs[term] = translatedTerms[i];
-    }
-  });
-
-  console.log('[Vocab Extractor] Extracted pairs:', pairs);
-  return pairs;
 }
 
 // Start lazy translation mode (translate as user scrolls)
