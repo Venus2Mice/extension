@@ -2219,54 +2219,146 @@ function isDescendantOf(node, element) {
 }
 
 // Detect text style/tone for better translation
+// Enhanced: Multilingual patterns + Style blending
 function detectTextStyle(textMap) {
   if (!textMap || textMap.length === 0) {
     return { type: 'general', name: 'Văn bản thông thường', instruction: '' };
   }
 
-  // Combine sample text (first 1000 chars) - use trimmed if available
-  const sampleText = textMap.slice(0, 50).map(e => e.trimmed || e.original).join(' ').substring(0, 1000).toLowerCase();
+  // Combine sample text (first 2000 chars for better detection)
+  const sampleText = textMap.slice(0, 100).map(e => e.trimmed || e.original).join(' ').substring(0, 2000);
+  const lowerText = sampleText.toLowerCase();
 
-  // Count indicators
+  // ============================================================================
+  // MULTILINGUAL PATTERN DETECTION
+  // ============================================================================
+
   const indicators = {
-    // Academic/Technical
-    technical: (sampleText.match(/\b(algorithm|function|method|class|interface|database|api|protocol|implementation|architecture)\b/gi) || []).length,
-    academic: (sampleText.match(/\b(research|study|analysis|conclusion|hypothesis|methodology|experiment|data|results|findings)\b/gi) || []).length,
+    // Technical/Programming - EN + ZH + VI + JP + KR
+    technical: countPatterns(sampleText, [
+      // English
+      /\b(algorithm|function|method|class|interface|database|api|protocol|implementation|architecture|code|programming|developer|software|framework|library|debug|deploy|server|client)\b/gi,
+      // Chinese (技术/编程)
+      /[算法|函数|方法|类|接口|数据库|协议|实现|架构|代码|编程|开发者|软件|框架|调试|部署|服务器|客户端]/g,
+      // Vietnamese
+      /\b(thuật toán|hàm|phương thức|lớp|giao diện|cơ sở dữ liệu|giao thức|triển khai|kiến trúc|mã nguồn|lập trình)\b/gi,
+      // Japanese (技術)
+      /[アルゴリズム|関数|メソッド|クラス|インターフェース|データベース|プロトコル|実装|アーキテクチャ]/g
+    ]),
 
-    // News/Journalism
-    news: (sampleText.match(/\b(reported|according to|sources|announced|stated|officials|government|president|minister)\b/gi) || []).length,
+    // Academic/Research - EN + ZH + VI
+    academic: countPatterns(sampleText, [
+      /\b(research|study|analysis|conclusion|hypothesis|methodology|experiment|data|results|findings|thesis|dissertation|journal|peer-reviewed|citation)\b/gi,
+      /[研究|分析|结论|假设|方法论|实验|数据|结果|发现|论文|期刊|引用]/g,
+      /\b(nghiên cứu|phân tích|kết luận|giả thuyết|phương pháp|thí nghiệm|dữ liệu|kết quả|luận văn|luận án)\b/gi
+    ]),
 
-    // Business/Formal
-    business: (sampleText.match(/\b(company|business|market|industry|investment|profit|revenue|strategy|management|executive)\b/gi) || []).length,
+    // News/Journalism - EN + ZH + VI
+    news: countPatterns(sampleText, [
+      /\b(reported|according to|sources|announced|stated|officials|government|president|minister|breaking|exclusive|investigation)\b/gi,
+      /[报道|据悉|消息|宣布|声明|官员|政府|总统|部长|突发|独家|调查|记者]/g,
+      /\b(báo cáo|theo|nguồn tin|công bố|tuyên bố|quan chức|chính phủ|tổng thống|bộ trưởng|nóng|độc quyền)\b/gi
+    ]),
 
-    // Medical/Health
-    medical: (sampleText.match(/\b(patient|treatment|disease|symptom|diagnosis|therapy|clinical|medical|health|doctor)\b/gi) || []).length,
+    // Business/Corporate - EN + ZH + VI
+    business: countPatterns(sampleText, [
+      /\b(company|business|market|industry|investment|profit|revenue|strategy|management|executive|startup|enterprise|quarterly|fiscal)\b/gi,
+      /[公司|企业|市场|行业|投资|利润|收入|战略|管理|执行|创业|季度|财务]/g,
+      /\b(công ty|doanh nghiệp|thị trường|ngành|đầu tư|lợi nhuận|doanh thu|chiến lược|quản lý|điều hành|khởi nghiệp)\b/gi
+    ]),
 
-    // Legal
-    legal: (sampleText.match(/\b(law|legal|court|attorney|contract|agreement|clause|regulation|compliance|jurisdiction)\b/gi) || []).length,
+    // Medical/Health - EN + ZH + VI
+    medical: countPatterns(sampleText, [
+      /\b(patient|treatment|disease|symptom|diagnosis|therapy|clinical|medical|health|doctor|hospital|medicine|prescription|surgery)\b/gi,
+      /[患者|治疗|疾病|症状|诊断|治疗|临床|医疗|健康|医生|医院|药物|处方|手术]/g,
+      /\b(bệnh nhân|điều trị|bệnh|triệu chứng|chẩn đoán|liệu pháp|lâm sàng|y tế|sức khỏe|bác sĩ|bệnh viện|thuốc)\b/gi
+    ]),
 
-    // Creative/Literary
-    creative: (sampleText.match(/\b(story|character|novel|poem|imagination|adventure|journey|dream|beautiful|wonder)\b/gi) || []).length,
+    // Legal - EN + ZH + VI
+    legal: countPatterns(sampleText, [
+      /\b(law|legal|court|attorney|contract|agreement|clause|regulation|compliance|jurisdiction|lawsuit|plaintiff|defendant)\b/gi,
+      /[法律|合法|法院|律师|合同|协议|条款|法规|合规|管辖|诉讼|原告|被告]/g,
+      /\b(pháp luật|hợp pháp|tòa án|luật sư|hợp đồng|thỏa thuận|điều khoản|quy định|tuân thủ|thẩm quyền|vụ kiện)\b/gi
+    ]),
 
-    // Conversational/Casual
-    casual: (sampleText.match(/\b(hey|cool|awesome|great|wow|yeah|okay|basically|actually|pretty much)\b/gi) || []).length,
+    // Creative/Literary - EN + ZH + VI + narrative indicators
+    creative: countPatterns(sampleText, [
+      /\b(story|character|novel|poem|imagination|adventure|journey|dream|beautiful|wonder|narrative|fiction|romance|fantasy)\b/gi,
+      /[故事|人物|小说|诗|想象|冒险|旅程|梦|美丽|奇迹|叙事|虚构|言情|玄幻|穿越|修仙]/g,
+      /\b(câu chuyện|nhân vật|tiểu thuyết|thơ|tưởng tượng|phiêu lưu|hành trình|giấc mơ|đẹp|kỳ diệu|truyện|ngôn tình)\b/gi,
+      // Chinese novel chapter markers
+      /第[一二三四五六七八九十百千万\d]+章/g,
+      // Narrative patterns (dialogue, descriptions)
+      /["「『].*?["」』]/g
+    ]),
 
-    // Educational/Tutorial
-    tutorial: (sampleText.match(/\b(step|guide|tutorial|how to|learn|lesson|example|practice|exercise|instruction)\b/gi) || []).length
+    // Casual/Conversational - EN + ZH + VI + emoticons
+    casual: countPatterns(sampleText, [
+      /\b(hey|cool|awesome|great|wow|yeah|okay|basically|actually|pretty much|gonna|wanna|lol|omg)\b/gi,
+      /[哈哈|呵呵|嘿|酷|棒|哇|好的|其实|真的|太|了吧|吗|呢|啊]/g,
+      /\b(ê|tuyệt|tốt|wow|ừ|ok|thực ra|thật sự|quá|ghê|đỉnh|xịn)\b/gi,
+      // Emoticons & casual markers
+      /[😀-🙏🤣😂👍❤️💕🔥✨]/gu,
+      /[!?]{2,}/g
+    ]),
+
+    // Tutorial/Educational - EN + ZH + VI
+    tutorial: countPatterns(sampleText, [
+      /\b(step|guide|tutorial|how to|learn|lesson|example|practice|exercise|instruction|beginner|introduction|walkthrough)\b/gi,
+      /[步骤|指南|教程|如何|学习|课程|示例|练习|说明|入门|介绍|教学]/g,
+      /\b(bước|hướng dẫn|làm thế nào|học|bài học|ví dụ|thực hành|bài tập|hướng dẫn|cơ bản|giới thiệu)\b/gi,
+      // Numbered step patterns
+      /^\s*\d+[.)]\s/gm,
+      /step\s*\d+/gi
+    ])
   };
 
-  // Find dominant style
-  let maxCount = 0;
-  let dominantStyle = 'general';
+  // ============================================================================
+  // STYLE BLENDING - Handle mixed content
+  // ============================================================================
+
+  // Calculate total and find styles with significant presence
+  const totalMatches = Object.values(indicators).reduce((a, b) => a + b, 0);
+  const significantStyles = [];
 
   for (const [style, count] of Object.entries(indicators)) {
-    if (count > maxCount && count >= 3) { // Minimum threshold
-      maxCount = count;
-      dominantStyle = style;
+    if (count >= 2) { // Lower threshold for blending
+      significantStyles.push({ style, count, ratio: count / Math.max(totalMatches, 1) });
     }
   }
 
-  // Style definitions with translation instructions
+  // Sort by count descending
+  significantStyles.sort((a, b) => b.count - a.count);
+
+  // Determine result based on pattern distribution
+  let dominantStyle = 'general';
+  let blendedStyles = [];
+
+  if (significantStyles.length === 0) {
+    // No patterns detected - try language-based heuristic
+    const hasChineseChars = /[\u4e00-\u9fff]/.test(sampleText);
+    const hasLiteraryMarkers = /第[一二三四五六七八九十百千万\d]+章|["「『]/.test(sampleText);
+
+    if (hasChineseChars && hasLiteraryMarkers) {
+      dominantStyle = 'creative';
+    }
+  } else if (significantStyles.length === 1) {
+    // Single dominant style
+    dominantStyle = significantStyles[0].style;
+  } else {
+    // Multiple styles detected - use primary but note secondary
+    dominantStyle = significantStyles[0].style;
+
+    // If top 2 are close (within 50% ratio), blend them
+    if (significantStyles[1].count >= significantStyles[0].count * 0.5) {
+      blendedStyles = [significantStyles[0].style, significantStyles[1].style];
+    }
+  }
+
+  // ============================================================================
+  // STYLE DEFINITIONS WITH TRANSLATION INSTRUCTIONS
+  // ============================================================================
+
   const styles = {
     technical: {
       type: 'technical',
@@ -2301,17 +2393,17 @@ function detectTextStyle(textMap) {
     creative: {
       type: 'creative',
       name: 'Văn học/Sáng tạo',
-      instruction: 'This is creative/literary content. Use expressive, natural Vietnamese that captures the mood and emotion.'
+      instruction: 'This is creative/literary content (novel, story). Use expressive, natural Vietnamese that captures the mood, emotion and narrative flow. Preserve character dialogue style.'
     },
     casual: {
       type: 'casual',
       name: 'Thông thường/Đời thường',
-      instruction: 'This is casual/conversational content. Use natural, everyday Vietnamese as people normally speak.'
+      instruction: 'This is casual/conversational content. Use natural, everyday Vietnamese as people normally speak. Keep the friendly, relaxed tone.'
     },
     tutorial: {
       type: 'tutorial',
       name: 'Hướng dẫn/Giáo dục',
-      instruction: 'This is tutorial/educational content. Use clear, instructional Vietnamese that is easy to follow.'
+      instruction: 'This is tutorial/educational content. Use clear, instructional Vietnamese that is easy to follow. Number steps appropriately.'
     },
     general: {
       type: 'general',
@@ -2320,5 +2412,33 @@ function detectTextStyle(textMap) {
     }
   };
 
-  return styles[dominantStyle] || styles.general;
+  const result = styles[dominantStyle] || styles.general;
+
+  // Add blending info if applicable
+  if (blendedStyles.length === 2) {
+    const secondary = styles[blendedStyles[1]];
+    result.name += ` + ${secondary.name}`;
+    result.instruction += ` Also consider: ${secondary.instruction}`;
+    result.blended = blendedStyles;
+  }
+
+  // Add debug info
+  result.detectedPatterns = indicators;
+  result.confidence = significantStyles.length > 0
+    ? Math.min(significantStyles[0].count / 5, 1) // 0-1 scale
+    : 0;
+
+  console.log(`[Style Detection] Detected: ${result.name} (confidence: ${Math.round(result.confidence * 100)}%)`);
+
+  return result;
+}
+
+// Helper: Count pattern matches across multiple regex
+function countPatterns(text, patterns) {
+  let total = 0;
+  for (const pattern of patterns) {
+    const matches = text.match(pattern);
+    if (matches) total += matches.length;
+  }
+  return total;
 }
