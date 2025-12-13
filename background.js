@@ -16,6 +16,12 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 
   chrome.contextMenus.create({
+    id: 'translatePageStreaming',
+    title: '⚡ Dịch Streaming (Real-time)',
+    contexts: ['page']
+  });
+
+  chrome.contextMenus.create({
     id: 'translateSelection',
     title: 'Dịch văn bản đã chọn',
     contexts: ['selection']
@@ -39,6 +45,14 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     } else if (info.menuItemId === 'translatePageFull') {
       chrome.tabs.sendMessage(tab.id, {
         action: 'translatePageFull'
+      }, (response) => {
+        if (chrome.runtime.lastError) {
+          console.error('Error:', chrome.runtime.lastError.message);
+        }
+      });
+    } else if (info.menuItemId === 'translatePageStreaming') {
+      chrome.tabs.sendMessage(tab.id, {
+        action: 'translatePageStreaming'
       }, (response) => {
         if (chrome.runtime.lastError) {
           console.error('Error:', chrome.runtime.lastError.message);
@@ -112,6 +126,36 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     explainTextSemantics(request.text, request.apiKey)
       .then(result => sendResponse({ success: true, explanation: result }))
       .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+
+  // Streaming translation - sends chunks progressively to content script
+  if (request.action === 'streamTranslate') {
+    const tabId = sender.tab?.id;
+    if (!tabId) {
+      sendResponse({ success: false, error: 'No tab ID' });
+      return true;
+    }
+
+    // Start streaming in background, respond immediately
+    streamTranslateText(
+      request.text,
+      request.apiKey,
+      request.textStyle,
+      request.currentUrl,
+      request.chunkIndex,
+      tabId
+    ).catch(error => {
+      console.error('[Gemini Translator BG] Stream error:', error);
+      // Notify content script of error
+      chrome.tabs.sendMessage(tabId, {
+        action: 'streamError',
+        chunkIndex: request.chunkIndex,
+        error: error.message
+      });
+    });
+
+    sendResponse({ success: true, started: true });
     return true;
   }
 });
@@ -553,6 +597,154 @@ ${text}`;
     throw new Error('Không thể dịch văn bản - Invalid response format');
   } catch (error) {
     console.error('[Gemini Translator BG] Fetch error:', error);
+    throw error;
+  }
+}
+
+// ============================================================================
+// STREAMING TRANSLATION
+// ============================================================================
+
+/**
+ * Stream translate text using Gemini streamGenerateContent API
+ * Sends partial results to content script as they arrive
+ */
+async function streamTranslateText(text, apiKey, textStyle, currentUrl, chunkIndex, tabId) {
+  console.log(`[Gemini Translator BG] Starting stream for chunk ${chunkIndex}`);
+
+  // Get preferred model
+  const settings = await chrome.storage.sync.get(['preferredModel']);
+  const model = settings.preferredModel || 'gemini-2.5-flash';
+
+  // Use streaming endpoint
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?key=${apiKey}&alt=sse`;
+
+  // Build prompt (same as tryTranslate)
+  let instruction = '';
+  if (textStyle && textStyle.type !== 'general') {
+    instruction = textStyle.instruction + '\n';
+  }
+
+  const promptText = `${instruction}Translate ALL text to Vietnamese (Tiếng Việt).
+
+Format: Keep [number] prefix exactly as shown
+Input:  [0]text [1]more text [2]content
+Output: [0]bản dịch [1]nhiều text hơn [2]nội dung
+
+Rules:
+1. Keep [N] prefix for EVERY line
+2. Translate line-by-line in order
+3. Do NOT skip any line numbers
+4. Empty lines → [N] with no text
+
+Text to translate:
+${text}`;
+
+  const requestBody = {
+    contents: [{
+      parts: [{ text: promptText }]
+    }],
+    generationConfig: {
+      temperature: 0.2,
+      maxOutputTokens: 65536,
+    },
+    safetySettings: [
+      { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+      { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+      { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+      { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+    ]
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody)
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`API error ${response.status}: ${errorText.substring(0, 200)}`);
+    }
+
+    // Read streaming response
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let accumulatedText = '';
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+
+      if (done) {
+        console.log(`[Gemini Translator BG] Stream complete for chunk ${chunkIndex}`);
+        break;
+      }
+
+      // Decode chunk
+      buffer += decoder.decode(value, { stream: true });
+
+      // Process SSE events (each line starts with "data: ")
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const jsonStr = line.slice(6); // Remove "data: " prefix
+
+          if (jsonStr.trim() === '[DONE]') continue;
+
+          try {
+            const data = JSON.parse(jsonStr);
+
+            // Extract text from response
+            if (data.candidates?.[0]?.content?.parts?.[0]?.text) {
+              const newText = data.candidates[0].content.parts[0].text;
+              accumulatedText += newText;
+
+              // Send partial update to content script
+              chrome.tabs.sendMessage(tabId, {
+                action: 'streamChunk',
+                chunkIndex: chunkIndex,
+                partialText: accumulatedText,
+                delta: newText
+              });
+            }
+
+            // Check for finish reason
+            if (data.candidates?.[0]?.finishReason) {
+              console.log(`[Gemini Translator BG] Finish reason: ${data.candidates[0].finishReason}`);
+            }
+          } catch (parseError) {
+            // Ignore JSON parse errors for incomplete chunks
+            console.warn('[Gemini Translator BG] Parse error:', parseError.message);
+          }
+        }
+      }
+    }
+
+    // Send completion message
+    const finalTranslation = parseTranslationResponse(accumulatedText);
+    chrome.tabs.sendMessage(tabId, {
+      action: 'streamComplete',
+      chunkIndex: chunkIndex,
+      translation: finalTranslation,
+      modelUsed: model
+    });
+
+    console.log(`[Gemini Translator BG] Stream finished for chunk ${chunkIndex}, total length: ${accumulatedText.length}`);
+
+  } catch (error) {
+    console.error(`[Gemini Translator BG] Stream error for chunk ${chunkIndex}:`, error);
+
+    // Send error to content script
+    chrome.tabs.sendMessage(tabId, {
+      action: 'streamError',
+      chunkIndex: chunkIndex,
+      error: error.message
+    });
+
     throw error;
   }
 }

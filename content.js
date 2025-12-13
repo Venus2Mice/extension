@@ -11,6 +11,15 @@ let isPaused = false;
 let fatalErrorOccurred = false;
 const CONCURRENCY_LIMIT = 10;
 
+// ============================================================================
+// STREAMING STATE
+// ============================================================================
+let isStreamingMode = false;
+let streamingChunks = [];           // Array of chunk data { text, map, status }
+let streamingTextMap = [];          // Full text map for streaming mode
+let streamingCompletedCount = 0;    // Number of completed chunks
+let streamingTotalChunks = 0;       // Total chunks for progress tracking
+
 // Helper: Check if extension context is valid
 function isExtensionContextValid() {
   try {
@@ -158,6 +167,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     handleTranslatePageFull();
     sendResponse({ status: 'started' });
     return true;
+  } else if (request.action === 'translatePageStreaming') {
+    // New: Streaming translation mode
+    handleTranslatePageStreaming();
+    sendResponse({ status: 'started' });
+    return true;
   } else if (request.action === 'translateSelection') {
     handleTranslateSelection(request.text);
     sendResponse({ status: 'started' });
@@ -167,6 +181,26 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     sendResponse({ status: 'restored' });
     return true;
   }
+
+  // ============================================================================
+  // STREAMING MESSAGE HANDLERS
+  // ============================================================================
+
+  if (request.action === 'streamChunk') {
+    handleStreamChunk(request.chunkIndex, request.partialText, request.delta);
+    return true;
+  }
+
+  if (request.action === 'streamComplete') {
+    handleStreamComplete(request.chunkIndex, request.translation, request.modelUsed);
+    return true;
+  }
+
+  if (request.action === 'streamError') {
+    handleStreamError(request.chunkIndex, request.error);
+    return true;
+  }
+
   return true;
 });
 
@@ -790,6 +824,318 @@ async function translateBatch(nodes, apiKey) {
     node.textContent = text; // Keep original if single batch fails
   }
 }
+
+// ============================================================================
+// STREAMING TRANSLATION FUNCTIONS
+// ============================================================================
+
+/**
+ * Handle full page translation with STREAMING mode
+ * Text appears progressively as API responds
+ */
+async function handleTranslatePageStreaming() {
+  console.log('[Gemini Translator] Starting STREAMING page translation...');
+
+  // Stop other modes if active
+  if (isLazyMode && scrollObserver) {
+    scrollObserver.disconnect();
+    scrollObserver = null;
+    isLazyMode = false;
+  }
+
+  if (isTranslated) {
+    console.log('[Gemini Translator] Page already translated, restoring original...');
+    restoreOriginalContent();
+    return;
+  }
+
+  showLoadingIndicator();
+  showProgressBar();
+  showStreamingIndicator();
+
+  try {
+    // Get API key
+    const { apiKey, preferredModel } = await chrome.runtime.sendMessage({ action: 'getApiKey' });
+
+    if (!apiKey) {
+      showNotification('Vui lòng cấu hình Gemini API key trong popup extension', 'error');
+      hideLoadingIndicator();
+      hideProgressBar();
+      hideStreamingIndicator();
+      return;
+    }
+
+    // Save original content
+    if (!originalContent) {
+      originalContent = document.body.cloneNode(true);
+    }
+
+    // Get all text nodes
+    const textNodes = getTextNodes(document.body);
+    console.log('[Gemini Translator] Found', textNodes.length, 'text nodes');
+
+    // Calculate total characters
+    const totalChars = textNodes.reduce((sum, node) => {
+      const text = node.textContent.trim();
+      return text.length >= 3 ? sum + text.length : sum;
+    }, 0);
+
+    // Balanced chunking (similar to handleTranslatePageFull)
+    const MIN_CHUNKS = 3;
+    const MAX_CHUNK_SIZE = 15000;
+    const chunksByLimit = Math.ceil(totalChars / MAX_CHUNK_SIZE);
+    let targetChunkCount = chunksByLimit;
+    if (totalChars > 3000) {
+      targetChunkCount = Math.max(chunksByLimit, MIN_CHUNKS);
+    }
+    const optimalChunkSize = Math.ceil(totalChars / targetChunkCount);
+
+    console.log(`[Gemini Translator] Streaming: ${totalChars} chars, ${targetChunkCount} chunks`);
+
+    // Build text map and chunks
+    streamingTextMap = [];
+    streamingChunks = [];
+    let currentChunk = '';
+    let chunkMap = [];
+
+    textNodes.forEach((node, index) => {
+      const text = node.textContent;
+      const trimmed = text.trim();
+      if (trimmed && trimmed.length >= 3) {
+        const entry = {
+          node,
+          original: text,
+          trimmed: trimmed,
+          index,
+          hasLeadingSpace: text.startsWith(' ') || text.startsWith('\t'),
+          hasTrailingSpace: text.endsWith(' ') || text.endsWith('\t')
+        };
+        streamingTextMap.push(entry);
+
+        const line = `[${index}]${trimmed}\n`;
+
+        if (currentChunk.length + line.length > optimalChunkSize && currentChunk.length > 0) {
+          streamingChunks.push({ text: currentChunk, map: chunkMap, status: 'pending' });
+          currentChunk = line;
+          chunkMap = [entry];
+        } else {
+          currentChunk += line;
+          chunkMap.push(entry);
+        }
+      }
+    });
+
+    if (currentChunk.length > 0) {
+      streamingChunks.push({ text: currentChunk, map: chunkMap, status: 'pending' });
+    }
+
+    // Initialize streaming state
+    isStreamingMode = true;
+    streamingCompletedCount = 0;
+    streamingTotalChunks = streamingChunks.length;
+    fatalErrorOccurred = false;
+
+    console.log(`[Gemini Translator] Starting ${streamingChunks.length} streaming requests`);
+    updateProgressBar(0, streamingChunks.length);
+
+    // Detect text style
+    const textStyle = detectTextStyle(streamingTextMap);
+    showStickyNotification(preferredModel, textStyle);
+
+    // Start streaming requests for all chunks (concurrent)
+    for (let i = 0; i < streamingChunks.length; i++) {
+      const chunk = streamingChunks[i];
+      chunk.status = 'streaming';
+
+      // Send streaming request to background
+      chrome.runtime.sendMessage({
+        action: 'streamTranslate',
+        text: chunk.text,
+        apiKey: apiKey,
+        textStyle: textStyle,
+        currentUrl: window.location.href,
+        chunkIndex: i
+      });
+    }
+
+    showNotification(`Đang dịch streaming ${streamingChunks.length} phần...`, 'info');
+
+  } catch (error) {
+    console.error('[Gemini Translator] Streaming setup error:', error);
+    showNotification('Lỗi khi khởi tạo streaming: ' + error.message, 'error');
+    hideProgressBar();
+    hideStreamingIndicator();
+  } finally {
+    hideLoadingIndicator();
+  }
+}
+
+/**
+ * Handle incoming stream chunk - update UI in real-time
+ */
+function handleStreamChunk(chunkIndex, partialText, delta) {
+  if (!isStreamingMode || chunkIndex >= streamingChunks.length) return;
+
+  const chunk = streamingChunks[chunkIndex];
+  if (!chunk) return;
+
+  // Apply partial translation to UI
+  // Parse whatever lines are complete so far
+  const lines = partialText.split('\n');
+
+  for (const line of lines) {
+    const match = line.match(/^\[(\d+)\](.+)$/);
+    if (match) {
+      const idx = parseInt(match[1]);
+      const translation = match[2].trim();
+
+      const entry = chunk.map.find(e => e.index === idx);
+      if (entry && translation) {
+        // Apply with whitespace preservation
+        let finalText = translation;
+        if (entry.hasLeadingSpace) finalText = ' ' + finalText;
+        if (entry.hasTrailingSpace) finalText = finalText + ' ';
+
+        // Only update if text changed
+        if (entry.node.textContent !== finalText) {
+          entry.node.textContent = finalText;
+
+          // Add streaming highlight effect
+          entry.node.parentElement?.classList.add('gemini-streaming-active');
+          setTimeout(() => {
+            entry.node.parentElement?.classList.remove('gemini-streaming-active');
+          }, 500);
+        }
+      }
+    }
+  }
+
+  // Update streaming indicator
+  updateStreamingIndicator(chunkIndex, delta);
+}
+
+/**
+ * Handle stream completion for a chunk
+ */
+function handleStreamComplete(chunkIndex, translation, modelUsed) {
+  if (!isStreamingMode || chunkIndex >= streamingChunks.length) return;
+
+  const chunk = streamingChunks[chunkIndex];
+  if (!chunk) return;
+
+  console.log(`[Gemini Translator] Stream complete for chunk ${chunkIndex + 1}/${streamingTotalChunks}`);
+
+  // Apply final translation
+  applyTranslationToMap(translation, chunk.map);
+  chunk.status = 'completed';
+
+  streamingCompletedCount++;
+  updateProgressBar(streamingCompletedCount, streamingTotalChunks);
+
+  // Check if all chunks are done
+  if (streamingCompletedCount >= streamingTotalChunks) {
+    finishStreamingTranslation(modelUsed);
+  }
+}
+
+/**
+ * Handle stream error for a chunk
+ */
+function handleStreamError(chunkIndex, errorMessage) {
+  console.error(`[Gemini Translator] Stream error for chunk ${chunkIndex}: ${errorMessage}`);
+
+  if (chunkIndex < streamingChunks.length) {
+    streamingChunks[chunkIndex].status = 'error';
+  }
+
+  // Show error but don't stop other chunks
+  showNotification(`Lỗi chunk ${chunkIndex + 1}: ${errorMessage}`, 'error');
+
+  // If too many errors, stop
+  const errorCount = streamingChunks.filter(c => c.status === 'error').length;
+  if (errorCount > streamingTotalChunks / 2) {
+    fatalErrorOccurred = true;
+    showNotification('Quá nhiều lỗi, dừng dịch streaming', 'error');
+    hideProgressBar();
+    hideStreamingIndicator();
+    isStreamingMode = false;
+  }
+}
+
+/**
+ * Finish streaming translation
+ */
+function finishStreamingTranslation(modelUsed) {
+  console.log('[Gemini Translator] All streaming chunks completed!');
+
+  isStreamingMode = false;
+  isTranslated = true;
+
+  hideProgressBar();
+  hideStreamingIndicator();
+
+  const successCount = streamingChunks.filter(c => c.status === 'completed').length;
+  const errorCount = streamingChunks.filter(c => c.status === 'error').length;
+
+  if (errorCount > 0) {
+    showNotification(`Hoàn thành ${successCount}/${streamingTotalChunks} phần (${errorCount} lỗi)`, 'warning');
+  } else {
+    showNotification('Đã dịch streaming toàn bộ trang thành công!', 'success');
+  }
+}
+
+/**
+ * Show streaming indicator
+ */
+function showStreamingIndicator() {
+  let indicator = document.getElementById('gemini-streaming-indicator');
+  if (!indicator) {
+    indicator = document.createElement('div');
+    indicator.id = 'gemini-streaming-indicator';
+    indicator.className = 'gemini-streaming-indicator';
+    indicator.innerHTML = `
+      <div class="streaming-content">
+        <div class="streaming-icon">⚡</div>
+        <div class="streaming-text">
+          <span class="streaming-label">Streaming...</span>
+          <span class="streaming-delta"></span>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(indicator);
+  }
+  indicator.style.display = 'flex';
+}
+
+/**
+ * Hide streaming indicator
+ */
+function hideStreamingIndicator() {
+  const indicator = document.getElementById('gemini-streaming-indicator');
+  if (indicator) {
+    indicator.style.display = 'none';
+  }
+}
+
+/**
+ * Update streaming indicator with latest delta
+ */
+function updateStreamingIndicator(chunkIndex, delta) {
+  const indicator = document.getElementById('gemini-streaming-indicator');
+  if (indicator) {
+    const deltaEl = indicator.querySelector('.streaming-delta');
+    const labelEl = indicator.querySelector('.streaming-label');
+
+    if (labelEl) {
+      labelEl.textContent = `Chunk ${chunkIndex + 1}/${streamingTotalChunks}`;
+    }
+    if (deltaEl && delta) {
+      // Show last 30 chars of delta
+      deltaEl.textContent = delta.length > 30 ? '...' + delta.slice(-30) : delta;
+    }
+  }
+}
+
 
 // Get all text nodes in the document
 function getTextNodes(element) {
