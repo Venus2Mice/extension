@@ -600,21 +600,23 @@ ${text}`;
       maxOutputTokens: 65536,
     },
     safetySettings: [
+      // Use BLOCK_ONLY_HIGH to catch truly harmful content while allowing most translations
+      // This protects API key while not blocking legitimate news/education content
       {
         category: "HARM_CATEGORY_HARASSMENT",
-        threshold: "BLOCK_NONE"
+        threshold: "BLOCK_ONLY_HIGH"
       },
       {
         category: "HARM_CATEGORY_HATE_SPEECH",
-        threshold: "BLOCK_NONE"
+        threshold: "BLOCK_ONLY_HIGH"
       },
       {
         category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-        threshold: "BLOCK_NONE"
+        threshold: "BLOCK_MEDIUM_AND_ABOVE"
       },
       {
         category: "HARM_CATEGORY_DANGEROUS_CONTENT",
-        threshold: "BLOCK_NONE"
+        threshold: "BLOCK_ONLY_HIGH"
       }
     ]
   };
@@ -664,6 +666,29 @@ ${text}`;
     // Check for various response formats
     if (data.candidates && data.candidates.length > 0) {
       const candidate = data.candidates[0];
+
+      // ==========================================
+      // SAFETY CHECK: Handle SAFETY finish reason
+      // Warning first, then block on repeat
+      // ==========================================
+      if (candidate.finishReason === 'SAFETY') {
+        console.warn('[Gemini Translator BG] Content blocked by SAFETY!');
+        console.warn('[Gemini Translator BG] Safety ratings:', JSON.stringify(candidate.safetyRatings));
+
+        // Extract domain and handle safety block
+        const domain = extractDomain(currentUrl);
+        if (domain) {
+          const safetyResult = await handleApiSafetyBlock(domain);
+          if (safetyResult.permanent) {
+            throw new Error(`⛔ ${safetyResult.reason}`);
+          } else {
+            // First offense - warn but continue (content still blocked)
+            console.warn(`[Gemini Translator BG] Safety warning for ${domain}`);
+          }
+        }
+
+        throw new Error('Nội dung bị Gemini chặn vì lý do an toàn. Vui lòng thử trang khác.');
+      }
 
       // Check if response was truncated
       if (candidate.finishReason === 'MAX_TOKENS') {
@@ -738,10 +763,11 @@ ${text}`;
       maxOutputTokens: 65536,
     },
     safetySettings: [
-      { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-      { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-      { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-      { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+      // Safer thresholds to protect API key
+      { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_ONLY_HIGH" },
+      { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_ONLY_HIGH" },
+      { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+      { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_ONLY_HIGH" }
     ]
   };
 

@@ -11,7 +11,28 @@ const MAX_DOMAINS = 50; // Limit cache size
 
 const CONTENT_FILTER_KEY = 'contentFilterData';
 
-// CRITICAL: Always block (explicit illegal content)
+// =============================================================================
+// ABSOLUTE BLOCK: ALWAYS block, NO exceptions (illegal content)
+// These patterns are checked FIRST before any other filters
+// =============================================================================
+const ABSOLUTE_BLOCK_PATTERNS = [
+  // CSAM - CRITICAL (CẤM TUYỆT ĐỐI - Báo cáo cơ quan chức năng)
+  /child.{0,10}(porn|sex|nude|naked|abuse)/i,
+  /\b(csam|pedo|pedophil|loli|shota)\b/i,
+  /minor.{0,10}(sex|nude|naked|exploit)/i,
+  /\b(jailbait|preteen)\b/i,
+
+  // Terrorism instruction
+  /\b(bomb[.\s-]?making|explosive[.\s-]?recipe)\b/i,
+  /\b(how[.\s-]?to[.\s-]?kill|murder[.\s-]?guide|assassination)\b/i,
+  /\b(terrorist[.\s-]?manual|jihad[.\s-]?training)\b/i,
+
+  // Extreme illegal
+  /\b(drug[.\s-]?recipe|meth[.\s-]?cook|heroin[.\s-]?make)\b/i,
+  /\b(human[.\s-]?trafficking|slave[.\s-]?trade)\b/i
+];
+
+// CRITICAL: Always block (explicit adult sites)
 const CRITICAL_DOMAIN_PATTERNS = [
   /\b(pornhub|xvideos|xhamster|xnxx|redtube|youporn)\b/i,
   /\b(brazzers|bangbros|realitykings)\b/i,
@@ -55,6 +76,7 @@ const SAFE_CATEGORIES = [
   'encyclopedia', 'reference', 'legal', 'medical', 'science'
 ];
 
+
 /**
  * Get content filter data from storage
  */
@@ -65,10 +87,20 @@ async function getContentFilterData() {
       warningHistory: {},    // { domain: { count, lastWarning, reasons } }
       blockedDomains: [],    // Permanently blocked after repeated violations
       allowedDomains: [],    // User explicitly allowed despite warning
-      customBlocked: []      // User manually blocked
+      customBlocked: [],     // User manually blocked
+      safetyBlocks: {        // Track API safety blocks
+        count: 0,
+        domains: []
+      }
     };
   } catch (error) {
-    return { warningHistory: {}, blockedDomains: [], allowedDomains: [], customBlocked: [] };
+    return {
+      warningHistory: {},
+      blockedDomains: [],
+      allowedDomains: [],
+      customBlocked: [],
+      safetyBlocks: { count: 0, domains: [] }
+    };
   }
 }
 
@@ -81,6 +113,85 @@ async function saveContentFilterData(data) {
   } catch (error) {
     console.error('[Smart Filter] Error saving data:', error);
   }
+}
+
+/**
+ * ABSOLUTE CHECK: Check for content that must NEVER be sent to API
+ * This is the FIRST check, bypasses all other filters
+ * @param {string} url - URL to check
+ * @param {string} textContent - Page content to check
+ * @returns {Object} { blocked: boolean, reason: string, critical: boolean }
+ */
+function isAbsolutelyBlocked(url, textContent = '') {
+  const textToCheck = ((url || '') + ' ' + (textContent || '')).toLowerCase();
+
+  for (const pattern of ABSOLUTE_BLOCK_PATTERNS) {
+    if (pattern.test(textToCheck)) {
+      console.error('[CRITICAL BLOCK] Absolute block pattern matched:', pattern);
+      return {
+        blocked: true,
+        reason: '⛔ NỘI DUNG BỊ CẤM TUYỆT ĐỐI - Không thể dịch',
+        category: 'absolute_block',
+        critical: true,
+        canAppeal: false
+      };
+    }
+  }
+
+  return { blocked: false };
+}
+
+/**
+ * Record when Gemini API blocks content due to safety
+ * Used to track and potentially auto-block domains
+ */
+async function recordSafetyBlock(domain, safetyRatings = null) {
+  const filterData = await getContentFilterData();
+
+  filterData.safetyBlocks = filterData.safetyBlocks || { count: 0, domains: [] };
+  filterData.safetyBlocks.count++;
+
+  if (domain && !filterData.safetyBlocks.domains.includes(domain)) {
+    filterData.safetyBlocks.domains.push(domain);
+  }
+
+  // Alert if too many blocks (potential issue with filter patterns)
+  if (filterData.safetyBlocks.count >= 10) {
+    console.warn('[ALERT] 10+ safety blocks detected! Review filter patterns.');
+  }
+
+  await saveContentFilterData(filterData);
+  console.log(`[Safety Block] Recorded for ${domain}. Total: ${filterData.safetyBlocks.count}`);
+}
+
+/**
+ * Handle API SAFETY response - warning first, block on repeat
+ */
+async function handleApiSafetyBlock(domain) {
+  const filterData = await getContentFilterData();
+
+  // Check if this domain has been safety-blocked before
+  const previousBlocks = filterData.safetyBlocks?.domains?.includes(domain);
+
+  if (previousBlocks) {
+    // Second offense - permanent block
+    await blockDomainPermanently(domain);
+    await recordSafetyBlock(domain);
+    return {
+      blocked: true,
+      reason: `Domain bị chặn vĩnh viễn do vi phạm an toàn nhiều lần: ${domain}`,
+      permanent: true
+    };
+  }
+
+  // First offense - record and warn
+  await recordSafetyBlock(domain);
+  return {
+    blocked: false,
+    warning: true,
+    reason: `⚠️ Gemini đã chặn nội dung từ ${domain}. Lần sau sẽ bị block vĩnh viễn.`,
+    domain: domain
+  };
 }
 
 /**
@@ -123,6 +234,16 @@ async function isDomainSafeCategory(domain) {
 async function isContentBlocked(url, textContent = '') {
   const domain = extractDomain(url);
   if (!domain) return { blocked: false };
+
+  // ==========================================
+  // STEP 0: ABSOLUTE BLOCK CHECK (FIRST!)
+  // These patterns MUST be blocked, no exceptions
+  // ==========================================
+  const absoluteCheck = isAbsolutelyBlocked(url, textContent);
+  if (absoluteCheck.blocked) {
+    console.error('[CRITICAL] Absolute block triggered for:', domain);
+    return absoluteCheck;
+  }
 
   const filterData = await getContentFilterData();
 
