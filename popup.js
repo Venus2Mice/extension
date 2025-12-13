@@ -1,6 +1,6 @@
 // Popup JavaScript
 document.addEventListener('DOMContentLoaded', () => {
-  loadApiKey();
+  loadSettings();
   loadCacheInfo();
   loadDomainStats();
 
@@ -32,6 +32,16 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  // Auto-save style override selection
+  document.getElementById('styleOverride').addEventListener('change', () => {
+    const styleOverride = document.getElementById('styleOverride').value;
+    chrome.storage.sync.set({ styleOverride }, () => {
+      console.log('Auto-saved styleOverride:', styleOverride);
+      const label = styleOverride === 'auto' ? 'Tự động' : styleOverride;
+      showStatus(`✓ Đã lưu văn phong: ${label}`, 'success');
+    });
+  });
+
   // Allow Enter key to save API key
   document.getElementById('apiKey').addEventListener('keypress', (e) => {
     if (e.key === 'Enter') {
@@ -40,14 +50,17 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 
-// Load API key from storage
-function loadApiKey() {
-  chrome.storage.sync.get(['geminiApiKey', 'preferredModel'], (result) => {
+// Load settings from storage
+function loadSettings() {
+  chrome.storage.sync.get(['geminiApiKey', 'preferredModel', 'styleOverride'], (result) => {
     if (result.geminiApiKey) {
       document.getElementById('apiKey').value = result.geminiApiKey;
     }
     if (result.preferredModel) {
       document.getElementById('preferredModel').value = result.preferredModel;
+    }
+    if (result.styleOverride) {
+      document.getElementById('styleOverride').value = result.styleOverride;
     }
   });
 }
@@ -56,6 +69,7 @@ function loadApiKey() {
 function saveApiKey() {
   const apiKey = document.getElementById('apiKey').value.trim();
   const preferredModel = document.getElementById('preferredModel').value;
+  const styleOverride = document.getElementById('styleOverride').value;
 
   if (!apiKey) {
     showStatus('Vui lòng nhập API key', 'error');
@@ -64,10 +78,11 @@ function saveApiKey() {
 
   chrome.storage.sync.set({
     geminiApiKey: apiKey,
-    preferredModel: preferredModel
+    preferredModel: preferredModel,
+    styleOverride: styleOverride
   }, () => {
-    console.log('Saved preferredModel:', preferredModel);
-    showStatus(`✓ Đã lưu! Model ưu tiên: ${preferredModel}`, 'success');
+    console.log('Saved settings - Model:', preferredModel, 'Style:', styleOverride);
+    showStatus(`✓ Đã lưu cài đặt!`, 'success');
   });
 }
 

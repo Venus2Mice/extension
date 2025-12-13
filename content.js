@@ -219,11 +219,12 @@ async function handleTranslatePage() {
   showLoadingIndicator();
 
   try {
-    // Get API key
+    // Get API key and settings
     console.log('[Gemini Translator] Fetching API key...');
-    const { apiKey, preferredModel } = await chrome.runtime.sendMessage({ action: 'getApiKey' });
+    const { apiKey, preferredModel, styleOverride } = await chrome.runtime.sendMessage({ action: 'getApiKey' });
     console.log('[Gemini Translator] API key received:', apiKey ? 'Yes (length: ' + apiKey.length + ')' : 'No');
     console.log('[Gemini Translator] Preferred model:', preferredModel);
+    console.log('[Gemini Translator] Style override:', styleOverride);
 
     if (!apiKey) {
       showNotification('Vui lòng cấu hình Gemini API key trong popup extension', 'error');
@@ -325,13 +326,13 @@ async function handleTranslatePage() {
 
     console.log('[Gemini Translator] Split into', chunks.length, 'chunks');
 
-    // Detect text style/tone for better translation
-    const textStyle = detectTextStyle(textMap);
-    console.log('[Gemini Translator] Detected text style:', textStyle);
+    // Detect text style/tone for better translation (with override support)
+    const textStyle = getStyleWithOverride(textMap, styleOverride);
+    console.log('[Gemini Translator] Text style:', textStyle.name, textStyle.isManualOverride ? '(manual)' : '(auto)');
 
     // Show sticky notification with model and writing style
     showStickyNotification(actualModel, textStyle);
-    showNotification(`Phát hiện văn phong: ${textStyle.name}`, 'info');
+    showNotification(`Văn phong: ${textStyle.name}`, 'info');
 
     // Translate each chunk with retry logic
     let totalApplied = 0;
@@ -561,8 +562,8 @@ async function handleTranslatePageFull() {
   showProgressBar();
 
   try {
-    // Get API key
-    const { apiKey, preferredModel } = await chrome.runtime.sendMessage({ action: 'getApiKey' });
+    // Get API key and settings
+    const { apiKey, preferredModel, styleOverride } = await chrome.runtime.sendMessage({ action: 'getApiKey' });
 
     if (!apiKey) {
       showNotification('Vui lòng cấu hình Gemini API key trong popup extension', 'error');
@@ -660,9 +661,9 @@ async function handleTranslatePageFull() {
     console.log('[Gemini Translator] Split into', chunks.length, 'chunks');
     updateProgressBar(0, chunks.length);
 
-    // Detect text style
-    const textStyle = detectTextStyle(textMap);
-    console.log('[Gemini Translator] Detected text style:', textStyle);
+    // Detect text style (with override support)
+    const textStyle = getStyleWithOverride(textMap, styleOverride);
+    console.log('[Gemini Translator] Text style:', textStyle.name, textStyle.isManualOverride ? '(manual)' : '(auto)');
 
     // Show sticky notification with model and writing style
     showStickyNotification(actualModel, textStyle);
@@ -879,8 +880,8 @@ async function handleTranslatePageStreaming() {
   showStreamingIndicator();
 
   try {
-    // Get API key
-    const { apiKey, preferredModel } = await chrome.runtime.sendMessage({ action: 'getApiKey' });
+    // Get API key and settings
+    const { apiKey, preferredModel, styleOverride } = await chrome.runtime.sendMessage({ action: 'getApiKey' });
 
     if (!apiKey) {
       showNotification('Vui lòng cấu hình Gemini API key trong popup extension', 'error');
@@ -963,8 +964,9 @@ async function handleTranslatePageStreaming() {
     console.log(`[Gemini Translator] Starting ${streamingChunks.length} streaming requests`);
     updateProgressBar(0, streamingChunks.length);
 
-    // Detect text style
-    const textStyle = detectTextStyle(streamingTextMap);
+    // Detect text style (with override support)
+    const textStyle = getStyleWithOverride(streamingTextMap, styleOverride);
+    console.log('[Gemini Translator] Text style:', textStyle.name, textStyle.isManualOverride ? '(manual)' : '(auto)');
     showStickyNotification(preferredModel, textStyle);
 
     // Start streaming requests for all chunks (concurrent)
@@ -2441,4 +2443,79 @@ function countPatterns(text, patterns) {
     if (matches) total += matches.length;
   }
   return total;
+}
+
+/**
+ * Get text style with override support
+ * If user has set a specific style override, use that instead of auto-detection
+ * @param {Array} textMap - Text map from getTextNodes
+ * @param {string} styleOverride - User's style override setting ('auto' or specific style)
+ * @returns {Object} Style object with type, name, and instruction
+ */
+function getStyleWithOverride(textMap, styleOverride) {
+  // If auto, use detection
+  if (!styleOverride || styleOverride === 'auto') {
+    return detectTextStyle(textMap);
+  }
+
+  // Manual override - use predefined style
+  const styles = {
+    technical: {
+      type: 'technical',
+      name: '💻 Kỹ thuật/Công nghệ (Thủ công)',
+      instruction: 'This is technical/programming content. Keep technical terms in English when appropriate (e.g., API, function, class). Use precise, formal Vietnamese.'
+    },
+    academic: {
+      type: 'academic',
+      name: '🎓 Học thuật/Nghiên cứu (Thủ công)',
+      instruction: 'This is academic/research content. Use formal, scholarly Vietnamese. Maintain academic terminology accurately.'
+    },
+    news: {
+      type: 'news',
+      name: '📰 Tin tức/Báo chí (Thủ công)',
+      instruction: 'This is news/journalism content. Use journalistic Vietnamese style, clear and objective tone.'
+    },
+    business: {
+      type: 'business',
+      name: '💼 Kinh doanh/Chính thức (Thủ công)',
+      instruction: 'This is business/corporate content. Use professional, formal Vietnamese appropriate for business context.'
+    },
+    medical: {
+      type: 'medical',
+      name: '🏥 Y tế/Sức khỏe (Thủ công)',
+      instruction: 'This is medical/health content. Use accurate medical terminology in Vietnamese, maintain professional tone.'
+    },
+    legal: {
+      type: 'legal',
+      name: '⚖️ Pháp lý/Luật (Thủ công)',
+      instruction: 'This is legal content. Use precise legal Vietnamese terminology, maintain formal and exact language.'
+    },
+    creative: {
+      type: 'creative',
+      name: '📚 Văn học/Sáng tạo (Thủ công)',
+      instruction: 'This is creative/literary content (novel, story). Use expressive, natural Vietnamese that captures the mood, emotion and narrative flow. Preserve character dialogue style.'
+    },
+    casual: {
+      type: 'casual',
+      name: '💬 Thông thường/Đời thường (Thủ công)',
+      instruction: 'This is casual/conversational content. Use natural, everyday Vietnamese as people normally speak. Keep the friendly, relaxed tone.'
+    },
+    tutorial: {
+      type: 'tutorial',
+      name: '📖 Hướng dẫn/Giáo dục (Thủ công)',
+      instruction: 'This is tutorial/educational content. Use clear, instructional Vietnamese that is easy to follow. Number steps appropriately.'
+    },
+    general: {
+      type: 'general',
+      name: '📄 Văn bản thông thường (Thủ công)',
+      instruction: 'Translate naturally to Vietnamese.'
+    }
+  };
+
+  const result = styles[styleOverride] || styles.general;
+  result.isManualOverride = true;
+  result.confidence = 1.0; // User explicitly chose this
+
+  console.log(`[Style] Using MANUAL override: ${result.name}`);
+  return result;
 }

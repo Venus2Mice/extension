@@ -76,8 +76,12 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 // Handle messages from content script or popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'getApiKey') {
-    chrome.storage.sync.get(['geminiApiKey', 'preferredModel'], (result) => {
-      sendResponse({ apiKey: result.geminiApiKey || '', preferredModel: result.preferredModel || 'gemini-2.5-flash' });
+    chrome.storage.sync.get(['geminiApiKey', 'preferredModel', 'styleOverride'], (result) => {
+      sendResponse({
+        apiKey: result.geminiApiKey || '',
+        preferredModel: result.preferredModel || 'gemini-2.5-flash',
+        styleOverride: result.styleOverride || 'auto'
+      });
     });
     return true; // Keep the message channel open for async response
   }
