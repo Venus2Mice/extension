@@ -1320,6 +1320,10 @@ function showTranslationPopup(original, translation, selectionRect) {
           <span class="btn-icon">📋</span>
           <span class="btn-text">Sao chép</span>
         </button>
+        <div class="feedback-buttons" style="margin-left: auto; display: flex; gap: 4px;">
+          <button class="feedback-btn thumbs-up" title="Bản dịch tốt">👍</button>
+          <button class="feedback-btn thumbs-down" title="Bản dịch cần cải thiện">👎</button>
+        </div>
       </div>
       <div class="explanation-section" style="display: none;">
         <strong>📚 Giải thích ngữ nghĩa:</strong>
@@ -1395,6 +1399,45 @@ function showTranslationPopup(original, translation, selectionRect) {
       showNotification('Không thể sao chép', 'error');
     }
   });
+
+  // Feedback handlers (self-learning)
+  const thumbsUpBtn = popup.querySelector('.thumbs-up');
+  const thumbsDownBtn = popup.querySelector('.thumbs-down');
+
+  if (thumbsUpBtn) {
+    thumbsUpBtn.addEventListener('click', () => {
+      chrome.runtime.sendMessage({
+        action: 'recordFeedback',
+        url: window.location.href,
+        isPositive: true
+      });
+      thumbsUpBtn.textContent = '✅';
+      thumbsUpBtn.disabled = true;
+      thumbsDownBtn.disabled = true;
+      showNotification('Cảm ơn phản hồi! Đã ghi nhận.', 'success');
+
+      // Also learn vocabulary from this translation
+      chrome.runtime.sendMessage({
+        action: 'learnVocabulary',
+        url: window.location.href,
+        vocabPairs: extractVocabFromTranslation(original, translation)
+      });
+    });
+  }
+
+  if (thumbsDownBtn) {
+    thumbsDownBtn.addEventListener('click', () => {
+      chrome.runtime.sendMessage({
+        action: 'recordFeedback',
+        url: window.location.href,
+        isPositive: false
+      });
+      thumbsDownBtn.textContent = '✅';
+      thumbsUpBtn.disabled = true;
+      thumbsDownBtn.disabled = true;
+      showNotification('Cảm ơn phản hồi! Sẽ cải thiện bản dịch.', 'info');
+    });
+  }
 
   // Click outside to close
   setTimeout(() => {
@@ -1906,6 +1949,36 @@ function escapeHtml(text) {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Extract vocabulary pairs from a translation for learning
+ * @param {string} original - Original text
+ * @param {string} translated - Translated text
+ * @returns {Object} Vocabulary pairs { original: translated }
+ */
+function extractVocabFromTranslation(original, translated) {
+  const pairs = {};
+
+  // Extract capitalized terms (likely proper nouns/important terms)
+  const capitalizedPattern = /\b([A-Z][a-zA-Z]{2,})\b/g;
+  const originalTerms = original.match(capitalizedPattern) || [];
+
+  // Extract meaningful Vietnamese phrases (3+ chars, contains Vietnamese)
+  const vietnamesePattern = /[\u00C0-\u1EF9a-zA-Z]{3,}/g;
+  const translatedTerms = translated.match(vietnamesePattern) || [];
+
+  // Simple heuristic pairing
+  const uniqueOriginal = [...new Set(originalTerms)].slice(0, 5);
+
+  uniqueOriginal.forEach((term, i) => {
+    if (translatedTerms[i] && term.length >= 3 && translatedTerms[i].length >= 2) {
+      pairs[term] = translatedTerms[i];
+    }
+  });
+
+  console.log('[Vocab Extractor] Extracted pairs:', pairs);
+  return pairs;
 }
 
 // Start lazy translation mode (translate as user scrolls)

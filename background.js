@@ -162,6 +162,45 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     sendResponse({ success: true, started: true });
     return true;
   }
+
+  // ============================================================================
+  // SELF-LEARNING HANDLERS
+  // ============================================================================
+
+  if (request.action === 'recordFeedback') {
+    recordFeedback(request.url, request.isPositive, request.comment)
+      .then(() => sendResponse({ success: true }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+
+  if (request.action === 'learnVocabulary') {
+    learnVocabulary(request.url, request.vocabPairs)
+      .then(() => sendResponse({ success: true }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+
+  if (request.action === 'trackUrl') {
+    trackVisitedUrl(request.url)
+      .then(() => sendResponse({ success: true }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+
+  if (request.action === 'updateGuidelines') {
+    updateRefinedGuidelines(request.url, request.guidelines)
+      .then(() => sendResponse({ success: true }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+
+  if (request.action === 'getLearnedVocabulary') {
+    getLearnedVocabulary(request.url)
+      .then(vocab => sendResponse({ success: true, vocabulary: vocab }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
 });
 
 // Ensure content script is injected into the tab

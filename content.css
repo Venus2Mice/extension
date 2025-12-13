@@ -712,9 +712,12 @@
 }
 
 @keyframes streamingPulse {
-  0%, 100% {
+
+  0%,
+  100% {
     box-shadow: 0 8px 32px rgba(16, 185, 129, 0.35);
   }
+
   50% {
     box-shadow: 0 8px 48px rgba(16, 185, 129, 0.55);
   }
@@ -732,10 +735,13 @@
 }
 
 @keyframes streamingBolt {
-  0%, 100% {
+
+  0%,
+  100% {
     transform: translateY(0);
     opacity: 1;
   }
+
   50% {
     transform: translateY(-3px);
     opacity: 0.7;
@@ -766,10 +772,10 @@
 
 /* Streaming active highlight effect */
 .gemini-streaming-active {
-  background: linear-gradient(90deg, 
-    rgba(16, 185, 129, 0.15) 0%, 
-    rgba(16, 185, 129, 0.05) 50%,
-    transparent 100%) !important;
+  background: linear-gradient(90deg,
+      rgba(16, 185, 129, 0.15) 0%,
+      rgba(16, 185, 129, 0.05) 50%,
+      transparent 100%) !important;
   border-radius: 3px;
   animation: streamingHighlight 0.5s ease-out;
 }
@@ -778,7 +784,46 @@
   0% {
     background: rgba(16, 185, 129, 0.4);
   }
+
   100% {
     background: transparent;
   }
+}
+
+/* ============================================================================
+   FEEDBACK BUTTONS (Self-Learning)
+   ============================================================================ */
+
+.gemini-translator-popup .feedback-btn {
+  width: 32px;
+  height: 32px;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  background: white;
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gemini-translator-popup .feedback-btn:hover:not(:disabled) {
+  transform: scale(1.1);
+}
+
+.gemini-translator-popup .feedback-btn.thumbs-up:hover:not(:disabled) {
+  background: #dcfce7;
+  border-color: #22c55e;
+}
+
+.gemini-translator-popup .feedback-btn.thumbs-down:hover:not(:disabled) {
+  background: #fee2e2;
+  border-color: #ef4444;
+}
+
+.gemini-translator-popup .feedback-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
 }
