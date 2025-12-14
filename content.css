@@ -52,6 +52,14 @@
   align-items: center;
   font-weight: 600;
   font-size: 15px;
+  cursor: grab;
+  user-select: none;
+  transition: background 0.2s;
+}
+
+.gemini-translator-popup .popup-header:active {
+  cursor: grabbing;
+  background: linear-gradient(135deg, #5a6fd6 0%, #6a4190 100%);
 }
 
 .gemini-translator-popup .popup-close {
@@ -114,6 +122,25 @@
 .gemini-translator-popup .text-content {
   margin-top: 6px;
   word-wrap: break-word;
+}
+
+/* Paragraph styling for original and translated text */
+.gemini-translator-popup .original-paragraph,
+.gemini-translator-popup .translation-paragraph {
+  margin: 0 0 12px 0;
+  line-height: 1.7;
+  text-align: justify;
+}
+
+.gemini-translator-popup .original-paragraph:last-child,
+.gemini-translator-popup .translation-paragraph:last-child {
+  margin-bottom: 0;
+}
+
+.gemini-translator-popup .translation-paragraph:first-child::first-letter {
+  font-size: 1.3em;
+  font-weight: 600;
+  color: #1e40af;
 }
 
 /* Popup action buttons */

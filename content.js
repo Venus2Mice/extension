@@ -1423,6 +1423,121 @@ function restoreOriginalContent() {
 }
 
 
+// Clean translation text by removing [N] prefixes used in batch translation
+function cleanTranslationOutput(text) {
+  if (!text) return '';
+
+  // Check if text has [N] format (batch translation output)
+  const lines = text.split('\n');
+  const cleanedParts = [];
+
+  for (const line of lines) {
+    // Match [0], [1], [2], etc. at the start of lines
+    const match = line.match(/^\[(\d+)\](.*)$/);
+    if (match) {
+      const content = match[2].trim();
+      if (content) {
+        cleanedParts.push(content);
+      }
+    } else if (line.trim()) {
+      cleanedParts.push(line.trim());
+    }
+  }
+
+  return cleanedParts.join(' ') || text;
+}
+
+// Format translation HTML with paragraphs matching original structure
+function formatTranslationHtml(translation, original) {
+  const cleaned = cleanTranslationOutput(translation);
+  if (!cleaned) return '';
+
+  // Get paragraph count from original text
+  const originalParagraphs = getTextParagraphs(original);
+  const paragraphCount = originalParagraphs.length;
+
+  if (paragraphCount <= 1) {
+    // Single paragraph - just return as is
+    return `<p class="translation-paragraph">${escapeHtml(cleaned)}</p>`;
+  }
+
+  // Split translation into sentences
+  const sentences = cleaned.match(/[^.!?。！？]+[.!?。！？]+/g) || [cleaned];
+
+  if (sentences.length < paragraphCount) {
+    // Not enough sentences to split - return as single paragraph
+    return `<p class="translation-paragraph">${escapeHtml(cleaned)}</p>`;
+  }
+
+  // Distribute sentences proportionally based on original paragraph lengths
+  const totalOriginalLength = originalParagraphs.reduce((sum, p) => sum + p.length, 0);
+  const translationParagraphs = [];
+  let sentenceIndex = 0;
+
+  for (let i = 0; i < paragraphCount; i++) {
+    const ratio = originalParagraphs[i].length / totalOriginalLength;
+    let sentenceCount = Math.round(ratio * sentences.length);
+
+    // Ensure at least 1 sentence per paragraph, and don't exceed remaining
+    sentenceCount = Math.max(1, sentenceCount);
+    sentenceCount = Math.min(sentenceCount, sentences.length - sentenceIndex);
+
+    // For last paragraph, take all remaining sentences
+    if (i === paragraphCount - 1) {
+      sentenceCount = sentences.length - sentenceIndex;
+    }
+
+    const paragraphSentences = sentences.slice(sentenceIndex, sentenceIndex + sentenceCount);
+    translationParagraphs.push(paragraphSentences.join(' ').trim());
+    sentenceIndex += sentenceCount;
+  }
+
+  return translationParagraphs
+    .filter(p => p)
+    .map(p => `<p class="translation-paragraph">${escapeHtml(p)}</p>`)
+    .join('');
+}
+
+// Get paragraphs from text (split by double newlines or multiple sentences)
+function getTextParagraphs(text) {
+  if (!text) return [''];
+
+  const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+  // Try splitting by double newlines first
+  let paragraphs = normalized.split(/\n\s*\n/).filter(p => p.trim());
+
+  if (paragraphs.length > 1) {
+    return paragraphs.map(p => p.trim());
+  }
+
+  // No clear paragraph breaks - check if text is long enough to split by sentences
+  const sentences = text.match(/[^.!?。！？]+[.!?。！？]+/g) || [];
+
+  if (sentences.length >= 4 && text.length > 300) {
+    // Long text - group into 2 paragraphs
+    const mid = Math.ceil(sentences.length / 2);
+    return [
+      sentences.slice(0, mid).join(' ').trim(),
+      sentences.slice(mid).join(' ').trim()
+    ];
+  }
+
+  return [text.trim()];
+}
+
+// Format original text for HTML display with proper paragraphs
+function formatOriginalTextHtml(text) {
+  if (!text) return '';
+
+  const paragraphs = getTextParagraphs(text);
+
+  return paragraphs
+    .filter(p => p)
+    .map(p => `<p class="original-paragraph">${escapeHtml(p)}</p>`)
+    .join('');
+}
+
 // Show translation popup for selected text with smart positioning
 function showTranslationPopup(original, translation, selectionRect) {
   // Remove existing popup if any
@@ -1440,11 +1555,11 @@ function showTranslationPopup(original, translation, selectionRect) {
     <div class="popup-content">
       <div class="original-text">
         <strong>Văn bản gốc:</strong>
-        <div class="text-content">${escapeHtml(original)}</div>
+        <div class="text-content">${formatOriginalTextHtml(original)}</div>
       </div>
       <div class="translated-text">
         <strong>🇻🇳 Tiếng Việt:</strong>
-        <div class="text-content">${escapeHtml(translation)}</div>
+        <div class="text-content">${formatTranslationHtml(translation, original)}</div>
       </div>
       <div class="popup-actions">
         <button class="action-btn explain-btn" title="Giải thích ngữ nghĩa chi tiết">
@@ -1476,6 +1591,64 @@ function showTranslationPopup(original, translation, selectionRect) {
 
   // Calculate optimal position
   positionPopupOptimally(popup, selectionRect);
+
+  // Make popup draggable via header
+  const header = popup.querySelector('.popup-header');
+  let isDragging = false;
+  let dragStartX = 0;
+  let dragStartY = 0;
+  let popupStartX = 0;
+  let popupStartY = 0;
+
+  header.style.cursor = 'grab';
+
+  header.addEventListener('mousedown', (e) => {
+    // Don't drag if clicking on close button
+    if (e.target.classList.contains('popup-close')) return;
+
+    isDragging = true;
+    header.style.cursor = 'grabbing';
+    popup.style.transition = 'none'; // Disable transitions while dragging
+
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+    popupStartX = popup.offsetLeft;
+    popupStartY = popup.offsetTop;
+
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+
+    const deltaX = e.clientX - dragStartX;
+    const deltaY = e.clientY - dragStartY;
+
+    let newLeft = popupStartX + deltaX;
+    let newTop = popupStartY + deltaY;
+
+    // Keep popup within viewport bounds
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const scrollX = window.scrollX;
+    const scrollY = window.scrollY;
+    const popupWidth = popup.offsetWidth;
+    const popupHeight = popup.offsetHeight;
+
+    newLeft = Math.max(scrollX, Math.min(newLeft, scrollX + viewportWidth - popupWidth));
+    newTop = Math.max(scrollY, Math.min(newTop, scrollY + viewportHeight - popupHeight));
+
+    popup.style.left = newLeft + 'px';
+    popup.style.top = newTop + 'px';
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (isDragging) {
+      isDragging = false;
+      header.style.cursor = 'grab';
+      popup.style.transition = ''; // Re-enable transitions
+    }
+  });
 
   // Event handlers
   const closeBtn = popup.querySelector('.popup-close');
@@ -1525,7 +1698,7 @@ function showTranslationPopup(original, translation, selectionRect) {
   // Copy handler
   copyBtn.addEventListener('click', async () => {
     try {
-      await navigator.clipboard.writeText(translation);
+      await navigator.clipboard.writeText(cleanTranslationOutput(translation));
       copyBtn.innerHTML = '<span class="btn-icon">✅</span><span class="btn-text">Đã sao chép!</span>';
       setTimeout(() => {
         copyBtn.innerHTML = '<span class="btn-icon">📋</span><span class="btn-text">Sao chép</span>';
