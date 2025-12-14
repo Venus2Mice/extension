@@ -385,20 +385,23 @@ async function translateText(text, apiKey, textStyle, currentUrl) {
   const settings = await chrome.storage.sync.get(['preferredModel']);
   const preferredModel = settings.preferredModel || 'gemini-2.5-flash';
 
-  // List of Gemini models to try (only active models, verified as of Dec 2025)
-  // Removed: gemini-1.5-flash-latest, gemini-1.5-flash, gemini-1.5-pro-latest, gemini-pro (404 errors)
-  // Note: gemini-3-pro-preview requires paid API and has NO free tier
-  // Note: gemini-2.5-pro is the advanced thinking model (paid, stable)
+  // List of Gemini models to try (Dec 2025 - from official docs)
   const allModels = [
+    // Gemini 2.5 (Recommended)
     'gemini-2.5-flash',
     'gemini-2.5-flash-lite',
-    'gemini-2.5-pro',           // Paid - advanced thinking model
-    'gemini-flash-latest',
-    'gemini-2.0-flash-lite',
+    'gemini-2.5-pro',
+    'gemini-2.5-flash-preview-05-20',
+    // Gemini 2.0
     'gemini-2.0-flash',
-    'gemini-exp-1206',
-    'gemini-3-pro-preview',     // Paid only - no free tier
-    'gemini-flash-lite-latest',
+    'gemini-2.0-flash-001',
+    'gemini-2.0-flash-lite',
+    'gemini-2.0-flash-exp',
+    // Gemini 3 (Newest)
+    'gemini-3-pro-preview',
+    // Legacy
+    'gemini-1.5-flash',
+    'gemini-1.5-pro',
   ];
 
   // Prioritize preferred model first, then others

@@ -1,4 +1,4 @@
-// Popup JavaScript
+// Popup JavaScript - Clean UI
 document.addEventListener('DOMContentLoaded', () => {
   loadSettings();
   loadCacheInfo();
@@ -13,22 +13,26 @@ document.addEventListener('DOMContentLoaded', () => {
   // Translate current page
   document.getElementById('translateCurrentPage').addEventListener('click', translateCurrentPage);
 
+  // Screenshot translate
+  document.getElementById('screenshotTranslate').addEventListener('click', screenshotTranslate);
+
   // Restore original page
   document.getElementById('restorePage').addEventListener('click', restorePage);
 
   // Clear cache
   document.getElementById('clearCache').addEventListener('click', clearCache);
 
-  // Domain management
-  document.getElementById('refreshDomains').addEventListener('click', loadDomainStats);
+  // Clear domains
   document.getElementById('clearDomains').addEventListener('click', clearDomainCache);
+
+  // Toggle advanced settings
+  document.getElementById('toggleAdvanced').addEventListener('click', toggleAdvanced);
 
   // Auto-save model selection
   document.getElementById('preferredModel').addEventListener('change', () => {
     const preferredModel = document.getElementById('preferredModel').value;
     chrome.storage.sync.set({ preferredModel }, () => {
-      console.log('Auto-saved preferredModel:', preferredModel);
-      showStatus(`✓ Đã lưu model: ${preferredModel}`, 'success');
+      showStatus(`✓ Model: ${preferredModel}`, 'success');
     });
   });
 
@@ -36,9 +40,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('styleOverride').addEventListener('change', () => {
     const styleOverride = document.getElementById('styleOverride').value;
     chrome.storage.sync.set({ styleOverride }, () => {
-      console.log('Auto-saved styleOverride:', styleOverride);
-      const label = styleOverride === 'auto' ? 'Tự động' : styleOverride;
-      showStatus(`✓ Đã lưu văn phong: ${label}`, 'success');
+      showStatus(`✓ Văn phong đã lưu`, 'success');
     });
   });
 
@@ -49,6 +51,20 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 });
+
+// Toggle advanced settings panel
+function toggleAdvanced() {
+  const panel = document.getElementById('advancedSettings');
+  const btn = document.getElementById('toggleAdvanced');
+
+  if (panel.style.display === 'none') {
+    panel.style.display = 'block';
+    btn.classList.add('open');
+  } else {
+    panel.style.display = 'none';
+    btn.classList.remove('open');
+  }
+}
 
 // Load settings from storage
 function loadSettings() {
@@ -68,21 +84,14 @@ function loadSettings() {
 // Save API key to storage
 function saveApiKey() {
   const apiKey = document.getElementById('apiKey').value.trim();
-  const preferredModel = document.getElementById('preferredModel').value;
-  const styleOverride = document.getElementById('styleOverride').value;
 
   if (!apiKey) {
     showStatus('Vui lòng nhập API key', 'error');
     return;
   }
 
-  chrome.storage.sync.set({
-    geminiApiKey: apiKey,
-    preferredModel: preferredModel,
-    styleOverride: styleOverride
-  }, () => {
-    console.log('Saved settings - Model:', preferredModel, 'Style:', styleOverride);
-    showStatus(`✓ Đã lưu cài đặt!`, 'success');
+  chrome.storage.sync.set({ geminiApiKey: apiKey }, () => {
+    showStatus('✓ Đã lưu API key', 'success');
   });
 }
 
@@ -92,31 +101,51 @@ async function translateCurrentPage() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
     if (!tab) {
-      showStatus('Không tìm thấy tab đang hoạt động', 'error');
+      showStatus('Không tìm thấy tab', 'error');
       return;
     }
 
-    // Check if API key exists
     chrome.storage.sync.get(['geminiApiKey'], async (result) => {
       if (!result.geminiApiKey) {
-        showStatus('Vui lòng cấu hình API key trước', 'error');
+        showStatus('Vui lòng nhập API key', 'error');
         return;
       }
 
       try {
-        // Ensure content script is injected
         await ensureContentScript(tab.id);
-
-        chrome.tabs.sendMessage(tab.id, { action: 'translatePageFull' }, (response) => {
+        chrome.tabs.sendMessage(tab.id, { action: 'translatePageStreaming' }, (response) => {
           if (chrome.runtime.lastError) {
             showStatus('Lỗi: ' + chrome.runtime.lastError.message, 'error');
           } else {
-            showStatus('Đang dịch toàn bộ trang...', 'success');
-            setTimeout(() => window.close(), 1500);
+            showStatus('Đang dịch...', 'success');
+            setTimeout(() => window.close(), 1000);
           }
         });
       } catch (error) {
         showStatus('Lỗi: ' + error.message, 'error');
+      }
+    });
+  } catch (error) {
+    showStatus('Lỗi: ' + error.message, 'error');
+  }
+}
+
+// Screenshot translate
+async function screenshotTranslate() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+    if (!tab) {
+      showStatus('Không tìm thấy tab', 'error');
+      return;
+    }
+
+    await ensureContentScript(tab.id);
+    chrome.tabs.sendMessage(tab.id, { action: 'startScreenshotMode' }, (response) => {
+      if (chrome.runtime.lastError) {
+        showStatus('Lỗi: ' + chrome.runtime.lastError.message, 'error');
+      } else {
+        window.close();
       }
     });
   } catch (error) {
@@ -130,15 +159,16 @@ async function restorePage() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
     if (!tab) {
-      showStatus('Không tìm thấy tab đang hoạt động', 'error');
+      showStatus('Không tìm thấy tab', 'error');
       return;
     }
 
     await ensureContentScript(tab.id);
-
     chrome.tabs.sendMessage(tab.id, { action: 'restoreOriginal' }, (response) => {
       if (chrome.runtime.lastError) {
         showStatus('Lỗi: ' + chrome.runtime.lastError.message, 'error');
+      } else {
+        showStatus('Đã khôi phục', 'success');
       }
     });
   } catch (error) {
@@ -146,10 +176,9 @@ async function restorePage() {
   }
 }
 
-// Ensure content script is injected into the tab
+// Ensure content script is injected
 async function ensureContentScript(tabId) {
   try {
-    // Try to ping the content script
     await new Promise((resolve, reject) => {
       chrome.tabs.sendMessage(tabId, { action: 'ping' }, (response) => {
         if (chrome.runtime.lastError) {
@@ -160,19 +189,16 @@ async function ensureContentScript(tabId) {
       });
     });
   } catch (error) {
-    // Content script not loaded, inject it
     await chrome.scripting.executeScript({
       target: { tabId: tabId },
       files: ['content.js']
     });
 
-    // Also inject CSS
     await chrome.scripting.insertCSS({
       target: { tabId: tabId },
       files: ['content.css']
     });
 
-    // Wait a bit for script to initialize
     await new Promise(resolve => setTimeout(resolve, 100));
   }
 }
@@ -186,42 +212,38 @@ function showStatus(message, type = 'info') {
 
   setTimeout(() => {
     statusDiv.style.display = 'none';
-  }, 3000);
+  }, 2500);
 }
 
 // Load cache info
 async function loadCacheInfo() {
   try {
-    const result = await chrome.storage.local.get(['translationCache', 'cacheTimestamp']);
+    const result = await chrome.storage.local.get(['translationCache']);
     const cacheInfo = document.getElementById('cacheInfo');
 
     if (result.translationCache) {
       const count = Object.keys(result.translationCache).length;
-      const age = result.cacheTimestamp ? Math.round((Date.now() - result.cacheTimestamp) / (24 * 60 * 60 * 1000)) : 0;
-      cacheInfo.textContent = `${count} bản dịch đã cache (${age} ngày)`;
+      cacheInfo.textContent = `${count} items`;
     } else {
-      cacheInfo.textContent = 'Chưa có cache';
+      cacheInfo.textContent = 'Empty';
     }
   } catch (error) {
-    console.error('Error loading cache info:', error);
-    document.getElementById('cacheInfo').textContent = 'Không thể tải';
+    document.getElementById('cacheInfo').textContent = '--';
   }
 }
 
-// Test connection to available models
+// Test connection
 async function testConnection() {
   const apiKey = document.getElementById('apiKey').value.trim();
 
   if (!apiKey) {
-    showStatus('Vui lòng nhập API key trước', 'error');
+    showStatus('Vui lòng nhập API key', 'error');
     return;
   }
 
-  showStatus('Đang kiểm tra các model...', 'info');
-
-  const testButton = document.getElementById('testConnection');
-  testButton.disabled = true;
-  testButton.textContent = '⏳ Đang kiểm tra...';
+  showStatus('Đang kiểm tra...', 'info');
+  const btn = document.getElementById('testConnection');
+  btn.disabled = true;
 
   try {
     const result = await chrome.runtime.sendMessage({
@@ -230,137 +252,51 @@ async function testConnection() {
     });
 
     if (result.success) {
-      const availableModels = result.availableModels;
-      const modelErrors = result.modelErrors || {};
-      const workingModel = result.workingModel;
-
-      // Update the select dropdown to show only available models
-      const select = document.getElementById('preferredModel');
-      const currentValue = select.value;
-
-      // Store all options
-      const allOptions = Array.from(select.options).map(opt => ({
-        value: opt.value,
-        text: opt.text.replace(/ [✓✗].*$/, '') // Remove existing markers
-      }));
-
-      // Clear and repopulate
-      select.innerHTML = '';
-
-      allOptions.forEach(option => {
-        const opt = document.createElement('option');
-        opt.value = option.value;
-
-        if (availableModels.includes(option.value)) {
-          opt.text = option.text + ' ✓';
-          opt.style.color = 'green';
-        } else {
-          const errorType = modelErrors[option.value] || 'UNKNOWN';
-          opt.text = option.text + ` ✗ (${errorType})`;
-          opt.style.color = 'gray';
-        }
-
-        select.appendChild(opt);
-      });
-
-      // Restore or set to working model
-      if (availableModels.includes(currentValue)) {
-        select.value = currentValue;
-      } else {
-        select.value = workingModel;
-      }
-
-      showStatus(`✓ Tìm thấy ${availableModels.length} model khả dụng!`, 'success');
+      showStatus(`✓ ${result.availableModels.length} model khả dụng`, 'success');
     } else {
       showStatus('Lỗi: ' + result.error, 'error');
     }
   } catch (error) {
-    showStatus('Lỗi khi kiểm tra: ' + error.message, 'error');
+    showStatus('Lỗi: ' + error.message, 'error');
   } finally {
-    testButton.disabled = false;
-    testButton.textContent = '🔍 Kiểm tra Kết nối';
+    btn.disabled = false;
   }
 }
 
 // Clear cache
 async function clearCache() {
-  if (!confirm('Bạn có chắc muốn xóa toàn bộ cache dịch? Việc này sẽ làm chậm lần dịch tiếp theo.')) {
-    return;
-  }
-
   try {
     await chrome.storage.local.remove(['translationCache', 'cacheTimestamp']);
-    showStatus('✓ Đã xóa cache thành công!', 'success');
+    showStatus('✓ Cache đã xóa', 'success');
     loadCacheInfo();
-
-    // Also notify content scripts to clear their in-memory cache
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab) {
-      chrome.tabs.sendMessage(tab.id, { action: 'clearCache' }, () => {
-        if (chrome.runtime.lastError) {
-          // Ignore errors if content script not loaded
-        }
-      });
-    }
   } catch (error) {
-    showStatus('Lỗi khi xóa cache: ' + error.message, 'error');
+    showStatus('Lỗi: ' + error.message, 'error');
   }
 }
 
-// Load domain statistics
+// Load domain stats
 async function loadDomainStats() {
   try {
     const response = await chrome.runtime.sendMessage({ action: 'getDomainStats' });
     const statsDiv = document.getElementById('domainStats');
 
     if (response.success && response.stats) {
-      const stats = response.stats;
-
-      if (stats.totalDomains === 0) {
-        statsDiv.innerHTML = '<div style="color: #999;">Chưa có domain nào được phân tích</div>';
-      } else {
-        let html = `<div style="margin-bottom: 8px;"><strong>${stats.totalDomains} domains</strong> - ${stats.totalUsage} lần sử dụng</div>`;
-
-        // Show top 5 domains
-        const topDomains = stats.domains
-          .sort((a, b) => b.usageCount - a.usageCount)
-          .slice(0, 5);
-
-        html += '<div style="font-size: 12px; max-height: 120px; overflow-y: auto;">';
-        for (const d of topDomains) {
-          html += `
-            <div style="padding: 4px 0; border-bottom: 1px solid #eee;">
-              <div style="font-weight: 500;">${d.domain}</div>
-              <div style="color: #666; font-size: 11px;">
-                ${d.type} • ${d.usageCount} lần • ${d.age} ngày
-              </div>
-            </div>
-          `;
-        }
-        html += '</div>';
-
-        statsDiv.innerHTML = html;
-      }
+      statsDiv.textContent = `${response.stats.totalDomains} domains`;
     } else {
-      statsDiv.textContent = 'Không thể tải thống kê';
+      statsDiv.textContent = '--';
     }
   } catch (error) {
-    console.error('Error loading domain stats:', error);
-    document.getElementById('domainStats').textContent = 'Lỗi khi tải';
+    document.getElementById('domainStats').textContent = '--';
   }
 }
 
 // Clear domain cache
 async function clearDomainCache() {
-  if (!confirm('Xóa tất cả domain profiles? AI sẽ phải học lại văn phong các trang web.')) {
-    return;
-  }
-
   try {
     const response = await chrome.runtime.sendMessage({ action: 'clearDomainCache' });
 
     if (response.success) {
-      showStatus('✓ Đã xóa domain cache!', 'success');
+      showStatus('✓ Domain cache đã xóa', 'success');
       loadDomainStats();
     } else {
       showStatus('Lỗi: ' + response.error, 'error');

@@ -10,109 +10,107 @@
 
 <body>
   <div class="container">
+    <!-- Simple Header -->
     <div class="header">
-      <h1>🌐 Gemini Translator</h1>
-      <p>Dịch sang Tiếng Việt</p>
+      <img src="icons/icon128.png" alt="Logo" class="logo-img">
+      <span class="title">Translator</span>
     </div>
 
-    <div class="section">
-      <label for="apiKey">Gemini API Key:</label>
-      <input type="password" id="apiKey" placeholder="Nhập API key của bạn">
-      <div style="display: flex; gap: 10px; margin-top: 10px;">
-        <button id="saveApiKey" class="btn btn-primary" style="flex: 1;">Lưu API Key</button>
-        <button id="testConnection" class="btn btn-secondary" style="flex: 1;">🔍 Kiểm tra Kết nối</button>
-      </div>
-      <p class="help-text">
-        Lấy API key miễn phí tại:
-        <a href="https://makersuite.google.com/app/apikey" target="_blank">Google AI Studio</a>
-      </p>
+    <!-- Main Actions -->
+    <div class="main-actions">
+      <button id="translateCurrentPage" class="btn-main">
+        <span class="icon">📄</span>
+        Dịch trang này
+      </button>
+      <button id="screenshotTranslate" class="btn-main btn-secondary">
+        <span class="icon">📷</span>
+        Chụp & Dịch
+      </button>
     </div>
 
+    <!-- Quick Status -->
     <div id="status" class="status"></div>
 
-    <div class="section actions" style="display: flex; gap: 10px;">
-      <button id="translateCurrentPage" class="btn btn-success" style="flex: 1;">Dịch Toàn bộ trang Hiện Tại</button>
-      <button id="restorePage" class="btn btn-secondary" style="flex: 1;">Khôi Phục Gốc</button>
+    <!-- API Key Section (compact) -->
+    <div class="api-section">
+      <input type="password" id="apiKey" placeholder="Nhập Gemini API Key">
+      <button id="saveApiKey" class="btn-save">Lưu</button>
     </div>
+    <a href="https://makersuite.google.com/app/apikey" target="_blank" class="api-link">Lấy API key miễn phí →</a>
 
-    <div class="section">
-      <label for="preferredModel">Model ưu tiên:</label>
-      <select id="preferredModel">
-        <option value="gemini-2.5-flash">Gemini 2.5 Flash (Nhanh, thông minh)</option>
-        <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash Lite (Nhanh nhất, tiết kiệm)</option>
-        <option value="gemini-2.5-pro">Gemini 2.5 Pro (Thinking, Paid)</option>
-        <option value="gemini-flash-latest">Gemini Flash Latest (Mới nhất)</option>
-        <option value="gemini-3-pro-preview">Gemini 3 Pro Preview (Paid Only)</option>
-        <option value="gemini-flash-lite-latest">Gemini Flash Lite Latest (Mới nhất)</option>
-        <option value="gemini-2.0-flash-lite">Gemini 2.0 Flash Lite</option>
-        <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
-        <option value="gemini-exp-1206">Gemini Exp 1206 (Thử nghiệm)</option>
-      </select>
-      <p class="help-text">
-        Model sẽ được ưu tiên sử dụng. Nếu hết quota hoặc lỗi, tự động chuyển sang model khác.
-      </p>
-    </div>
+    <!-- Advanced Settings Toggle -->
+    <button id="toggleAdvanced" class="btn-toggle">
+      <span class="toggle-icon">⚙️</span>
+      <span class="toggle-text">Cài đặt nâng cao</span>
+      <span class="toggle-arrow">▼</span>
+    </button>
 
-    <div class="section">
-      <label for="styleOverride">✍️ Văn phong dịch:</label>
-      <select id="styleOverride">
-        <option value="auto">🔮 Tự động phát hiện (Auto)</option>
-        <option value="general">📄 Văn bản thông thường</option>
-        <option value="technical">💻 Kỹ thuật/Công nghệ</option>
-        <option value="academic">🎓 Học thuật/Nghiên cứu</option>
-        <option value="news">📰 Tin tức/Báo chí</option>
-        <option value="business">💼 Kinh doanh/Chính thức</option>
-        <option value="medical">🏥 Y tế/Sức khỏe</option>
-        <option value="legal">⚖️ Pháp lý/Luật</option>
-        <option value="creative">📚 Văn học/Sáng tạo</option>
-        <option value="casual">💬 Thông thường/Đời thường</option>
-        <option value="tutorial">📖 Hướng dẫn/Giáo dục</option>
-      </select>
-      <p class="help-text">
-        Chọn văn phong cụ thể hoặc để "Tự động" để AI phát hiện từ nội dung trang.
-      </p>
-    </div>
+    <!-- Advanced Settings (hidden by default) -->
+    <div id="advancedSettings" class="advanced-panel" style="display: none;">
 
-    <div class="section">
-      <h3>Quản lý Cache:</h3>
-      <div style="display: flex; align-items: center; gap: 10px; margin-top: 8px;">
-        <span id="cacheInfo" style="color: #666; font-size: 14px;">Đang tải...</span>
-        <button id="clearCache" class="btn btn-secondary" style="margin-left: auto;">🗑️ Xóa Cache</button>
+      <div class="setting-group">
+        <label>Model</label>
+        <select id="preferredModel">
+          <optgroup label="Gemini 3 (Newest)">
+            <option value="gemini-3-pro-preview">Gemini 3 Pro Preview</option>
+          </optgroup>
+          <optgroup label="Gemini 2.5 (Recommended)">
+            <option value="gemini-2.5-flash" selected>Gemini 2.5 Flash (Stable)</option>
+            <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash Lite (Fast)</option>
+            <option value="gemini-2.5-pro">Gemini 2.5 Pro (Thinking)</option>
+            <option value="gemini-2.5-flash-preview-05-20">Gemini 2.5 Flash Preview</option>
+          </optgroup>
+          <optgroup label="Gemini 2.0">
+            <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+            <option value="gemini-2.0-flash-001">Gemini 2.0 Flash (Stable)</option>
+            <option value="gemini-2.0-flash-lite">Gemini 2.0 Flash Lite</option>
+            <option value="gemini-2.0-flash-exp">Gemini 2.0 Flash (Exp)</option>
+          </optgroup>
+          <optgroup label="Legacy">
+            <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
+            <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+          </optgroup>
+        </select>
       </div>
-      <p class="help-text">
-        Cache giúp dịch nhanh hơn cho văn bản đã dịch. Xóa cache nếu thấy bản dịch bị lỗi.
-      </p>
-    </div>
 
-    <div class="section">
-      <h3>🌐 Domain Profiles:</h3>
-      <div id="domainStats" style="margin-top: 8px; color: #666; font-size: 14px;">
-        Đang tải...
+      <div class="setting-group">
+        <label>Văn phong</label>
+        <select id="styleOverride">
+          <option value="auto">Tự động phát hiện</option>
+          <option value="general">Văn bản thông thường</option>
+          <option value="technical">Kỹ thuật/Công nghệ</option>
+          <option value="academic">Học thuật</option>
+          <option value="news">Tin tức</option>
+          <option value="creative">Văn học</option>
+          <option value="casual">Đời thường</option>
+        </select>
       </div>
-      <div style="display: flex; gap: 10px; margin-top: 8px;">
-        <button id="refreshDomains" class="btn btn-secondary" style="flex: 1;">🔄 Làm mới</button>
-        <button id="clearDomains" class="btn btn-secondary" style="flex: 1;">🗑️ Xóa Domain Cache</button>
+
+      <div class="setting-group">
+        <label>Cache</label>
+        <div class="cache-row">
+          <span id="cacheInfo">--</span>
+          <button id="clearCache" class="btn-small">Xóa</button>
+        </div>
       </div>
-      <p class="help-text">
-        AI tự học văn phong từng website để dịch chính xác hơn. Profiles được lưu 7 ngày.
-      </p>
+
+      <div class="setting-group">
+        <label>Domain Profiles</label>
+        <div class="cache-row">
+          <span id="domainStats">--</span>
+          <button id="clearDomains" class="btn-small">Xóa</button>
+        </div>
+      </div>
+
+      <button id="testConnection" class="btn-test">🔍 Kiểm tra kết nối API</button>
+
     </div>
 
-    <div class="section">
-      <h3>Cách sử dụng:</h3>
-      <ul class="instructions">
-        <li><strong>Dịch Lazy (Mặc định):</strong> Click chuột phải → "Dịch trang (Lazy)" - Dịch theo scroll, phù hợp
-          trang lớn</li>
-        <li><strong>Dịch toàn bộ:</strong> Click chuột phải → "Dịch toàn bộ trang (Full)" - Dịch ngay lập tức toàn bộ
-        </li>
-        <li><strong>Dịch văn bản:</strong> Chọn text → Click chuột phải → "Dịch văn bản đã chọn"</li>
-        <li><strong>Khôi phục:</strong> Click lại "Dịch trang" để khôi phục bản gốc</li>
-      </ul>
-    </div>
+    <!-- Restore Button -->
+    <button id="restorePage" class="btn-restore">Khôi phục trang gốc</button>
 
-    <div class="footer">
-      <p>Phiên bản 1.0.0</p>
-    </div>
+    <!-- Footer -->
+    <div class="footer">v1.0.0</div>
   </div>
 
   <script src="popup.js"></script>
