@@ -26,6 +26,12 @@ chrome.runtime.onInstalled.addListener(() => {
     title: 'Dịch văn bản đã chọn',
     contexts: ['selection']
   });
+
+  chrome.contextMenus.create({
+    id: 'screenshotTranslate',
+    title: '📷 Chụp màn hình & Dịch',
+    contexts: ['page', 'image']
+  });
 });
 
 // Handle context menu clicks
@@ -62,6 +68,14 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       chrome.tabs.sendMessage(tab.id, {
         action: 'translateSelection',
         text: info.selectionText
+      }, (response) => {
+        if (chrome.runtime.lastError) {
+          console.error('Error:', chrome.runtime.lastError.message);
+        }
+      });
+    } else if (info.menuItemId === 'screenshotTranslate') {
+      chrome.tabs.sendMessage(tab.id, {
+        action: 'startScreenshotMode'
       }, (response) => {
         if (chrome.runtime.lastError) {
           console.error('Error:', chrome.runtime.lastError.message);
@@ -220,6 +234,30 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     });
 
     sendResponse({ success: true, started: true });
+    return true;
+  }
+
+  // ============================================================================
+  // SCREENSHOT TRANSLATION HANDLERS
+  // ============================================================================
+
+  if (request.action === 'captureScreenshot') {
+    const tabId = sender.tab?.id;
+    if (!tabId) {
+      sendResponse({ success: false, error: 'No tab ID' });
+      return true;
+    }
+
+    chrome.tabs.captureVisibleTab(null, { format: 'png' })
+      .then(dataUrl => sendResponse({ success: true, dataUrl }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+
+  if (request.action === 'translateImage') {
+    translateImageWithVision(request.imageData, request.apiKey)
+      .then(result => sendResponse({ success: true, ...result }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
     return true;
   }
 
@@ -973,3 +1011,147 @@ Trả lời bằng Tiếng Việt, rõ ràng và dễ hiểu.`;
 
   throw lastError || new Error('All models failed to generate explanation');
 }
+
+// ============================================================================
+// SCREENSHOT TRANSLATION - GEMINI VISION API
+// ============================================================================
+
+/**
+ * Translate text in an image using Gemini Vision API
+ * @param {string} imageData - Base64 encoded image data (with or without data URI prefix)
+ * @param {string} apiKey - Gemini API key
+ * @returns {Promise<{original: string, translation: string}>}
+ */
+async function translateImageWithVision(imageData, apiKey) {
+  console.log('[Gemini Translator BG] Starting image translation...');
+
+  if (!apiKey) {
+    throw new Error('API key chưa được cấu hình');
+  }
+
+  // Get preferred model
+  const settings = await chrome.storage.sync.get(['preferredModel']);
+  const preferredModel = settings.preferredModel || 'gemini-2.5-flash';
+
+  // Vision-capable models to try
+  const visionModels = [
+    preferredModel,
+    'gemini-2.5-flash',
+    'gemini-2.0-flash',
+    'gemini-2.5-pro'
+  ];
+
+  // Remove duplicates
+  const models = [...new Set(visionModels)];
+
+  // Extract base64 data from data URI if present
+  let base64Data = imageData;
+  let mimeType = 'image/png';
+
+  if (imageData.startsWith('data:')) {
+    const match = imageData.match(/^data:([^;]+);base64,(.+)$/);
+    if (match) {
+      mimeType = match[1];
+      base64Data = match[2];
+    }
+  }
+
+  const prompt = `Look at this image and perform the following tasks:
+
+1. **Extract ALL visible text** from the image (OCR). Include every piece of text you can see.
+2. **Translate** the extracted text to Vietnamese (Tiếng Việt).
+
+Return your response in this EXACT format:
+
+ORIGINAL:
+[All extracted text from the image, preserving line breaks]
+
+TRANSLATION:
+[Vietnamese translation of the extracted text]
+
+If there is no visible text in the image, respond with:
+ORIGINAL:
+(Không có văn bản)
+
+TRANSLATION:
+(Không có văn bản để dịch)`;
+
+  let lastError = null;
+
+  for (const model of models) {
+    try {
+      console.log(`[Gemini Translator BG] Trying Vision model: ${model}`);
+
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+      const requestBody = {
+        contents: [{
+          parts: [
+            { text: prompt },
+            {
+              inline_data: {
+                mime_type: mimeType,
+                data: base64Data
+              }
+            }
+          ]
+        }],
+        generationConfig: {
+          temperature: 0.2,
+          maxOutputTokens: 8192
+        }
+      };
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[Gemini Translator BG] Vision API error: ${response.status}`, errorText);
+        throw new Error(`API error ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      if (data.candidates && data.candidates[0]?.content?.parts?.[0]?.text) {
+        const responseText = data.candidates[0].content.parts[0].text;
+        console.log('[Gemini Translator BG] Vision response:', responseText.substring(0, 200));
+
+        // Parse the response
+        const result = parseVisionResponse(responseText);
+        console.log('[Gemini Translator BG] Parsed result:', result);
+
+        return {
+          original: result.original,
+          translation: result.translation,
+          modelUsed: model
+        };
+      }
+
+      throw new Error('Invalid response format');
+
+    } catch (error) {
+      console.error(`[Gemini Translator BG] Vision model ${model} failed:`, error.message);
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error('Không thể dịch hình ảnh');
+}
+
+/**
+ * Parse Vision API response to extract original and translation
+ */
+function parseVisionResponse(text) {
+  const originalMatch = text.match(/ORIGINAL:\s*([\s\S]*?)(?=TRANSLATION:|$)/i);
+  const translationMatch = text.match(/TRANSLATION:\s*([\s\S]*?)$/i);
+
+  return {
+    original: originalMatch ? originalMatch[1].trim() : text,
+    translation: translationMatch ? translationMatch[1].trim() : ''
+  };
+}
+

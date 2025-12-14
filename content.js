@@ -204,6 +204,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     restoreOriginalContent();
     sendResponse({ status: 'restored' });
     return true;
+  } else if (request.action === 'startScreenshotMode') {
+    startScreenshotMode();
+    sendResponse({ status: 'started' });
+    return true;
   }
 
   // ============================================================================
@@ -3051,4 +3055,298 @@ function getStyleWithOverride(textMap, styleOverride) {
 
   console.log(`[Style] Using MANUAL override: ${result.name}`);
   return result;
+}
+
+// ============================================================================
+// SCREENSHOT TRANSLATION MODE
+// ============================================================================
+
+let isScreenshotMode = false;
+let screenshotOverlay = null;
+let selectionBox = null;
+let startX = 0, startY = 0;
+
+/**
+ * Start screenshot region selection mode
+ */
+function startScreenshotMode() {
+  if (isScreenshotMode) return;
+
+  console.log('[Gemini Translator] Starting screenshot mode...');
+  isScreenshotMode = true;
+
+  // Create overlay
+  screenshotOverlay = document.createElement('div');
+  screenshotOverlay.id = 'gemini-screenshot-overlay';
+  screenshotOverlay.className = 'gemini-screenshot-overlay';
+  screenshotOverlay.innerHTML = `
+    <div class="screenshot-instructions">
+      <span>📷 Kéo để chọn vùng cần dịch</span>
+      <span class="screenshot-hint">Nhấn ESC để hủy</span>
+    </div>
+  `;
+  document.body.appendChild(screenshotOverlay);
+
+  // Create selection box
+  selectionBox = document.createElement('div');
+  selectionBox.className = 'gemini-selection-box';
+  selectionBox.style.display = 'none';
+  document.body.appendChild(selectionBox);
+
+  // Event handlers
+  screenshotOverlay.addEventListener('mousedown', handleScreenshotMouseDown);
+  document.addEventListener('mousemove', handleScreenshotMouseMove);
+  document.addEventListener('mouseup', handleScreenshotMouseUp);
+  document.addEventListener('keydown', handleScreenshotKeyDown);
+}
+
+function handleScreenshotMouseDown(e) {
+  if (!isScreenshotMode) return;
+
+  startX = e.clientX;
+  startY = e.clientY;
+
+  selectionBox.style.left = startX + 'px';
+  selectionBox.style.top = startY + 'px';
+  selectionBox.style.width = '0';
+  selectionBox.style.height = '0';
+  selectionBox.style.display = 'block';
+}
+
+function handleScreenshotMouseMove(e) {
+  if (!isScreenshotMode || !selectionBox || selectionBox.style.display === 'none') return;
+
+  const currentX = e.clientX;
+  const currentY = e.clientY;
+
+  const left = Math.min(startX, currentX);
+  const top = Math.min(startY, currentY);
+  const width = Math.abs(currentX - startX);
+  const height = Math.abs(currentY - startY);
+
+  selectionBox.style.left = left + 'px';
+  selectionBox.style.top = top + 'px';
+  selectionBox.style.width = width + 'px';
+  selectionBox.style.height = height + 'px';
+}
+
+async function handleScreenshotMouseUp(e) {
+  if (!isScreenshotMode || !selectionBox || selectionBox.style.display === 'none') return;
+
+  const rect = selectionBox.getBoundingClientRect();
+
+  // Minimum selection size
+  if (rect.width < 20 || rect.height < 20) {
+    endScreenshotMode();
+    return;
+  }
+
+  // Hide overlay before capture
+  screenshotOverlay.style.display = 'none';
+  selectionBox.style.display = 'none';
+
+  try {
+    showLoadingIndicator();
+    showNotification('Đang chụp và dịch...', 'info');
+
+    // Capture screenshot
+    const response = await chrome.runtime.sendMessage({ action: 'captureScreenshot' });
+
+    if (!response.success) {
+      throw new Error(response.error || 'Không thể chụp màn hình');
+    }
+
+    // Crop to selection
+    const croppedImage = await cropImage(response.dataUrl, rect);
+
+    // Get API key and translate
+    const { apiKey } = await chrome.runtime.sendMessage({ action: 'getApiKey' });
+
+    if (!apiKey) {
+      throw new Error('Vui lòng cấu hình Gemini API key');
+    }
+
+    const translateResponse = await chrome.runtime.sendMessage({
+      action: 'translateImage',
+      imageData: croppedImage,
+      apiKey: apiKey
+    });
+
+    if (!translateResponse.success) {
+      throw new Error(translateResponse.error || 'Không thể dịch hình ảnh');
+    }
+
+    // Show result popup
+    showScreenshotTranslationPopup(croppedImage, translateResponse.original, translateResponse.translation);
+
+  } catch (error) {
+    console.error('[Gemini Translator] Screenshot translation error:', error);
+    showNotification('Lỗi: ' + error.message, 'error');
+  } finally {
+    hideLoadingIndicator();
+    endScreenshotMode();
+  }
+}
+
+function handleScreenshotKeyDown(e) {
+  if (e.key === 'Escape' && isScreenshotMode) {
+    endScreenshotMode();
+    showNotification('Đã hủy chụp màn hình', 'info');
+  }
+}
+
+function endScreenshotMode() {
+  isScreenshotMode = false;
+
+  if (screenshotOverlay) {
+    screenshotOverlay.remove();
+    screenshotOverlay = null;
+  }
+
+  if (selectionBox) {
+    selectionBox.remove();
+    selectionBox = null;
+  }
+
+  document.removeEventListener('mousemove', handleScreenshotMouseMove);
+  document.removeEventListener('mouseup', handleScreenshotMouseUp);
+  document.removeEventListener('keydown', handleScreenshotKeyDown);
+}
+
+/**
+ * Crop image to specified rectangle
+ */
+async function cropImage(dataUrl, rect) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+
+      // Account for device pixel ratio
+      const dpr = window.devicePixelRatio || 1;
+
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+
+      ctx.drawImage(
+        img,
+        rect.left * dpr,
+        rect.top * dpr,
+        rect.width * dpr,
+        rect.height * dpr,
+        0,
+        0,
+        canvas.width,
+        canvas.height
+      );
+
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = () => reject(new Error('Failed to load image'));
+    img.src = dataUrl;
+  });
+}
+
+/**
+ * Show screenshot translation popup
+ */
+function showScreenshotTranslationPopup(imageData, original, translation) {
+  // Remove existing popup
+  const existingPopup = document.getElementById('gemini-screenshot-popup');
+  if (existingPopup) existingPopup.remove();
+
+  const popup = document.createElement('div');
+  popup.id = 'gemini-screenshot-popup';
+  popup.className = 'gemini-translator-popup gemini-screenshot-popup';
+  popup.innerHTML = `
+    <div class="popup-header">
+      <span>📷 Dịch từ ảnh</span>
+      <button class="popup-close">&times;</button>
+    </div>
+    <div class="popup-content">
+      <div class="screenshot-preview">
+        <img src="${imageData}" alt="Screenshot" />
+      </div>
+      <div class="original-text">
+        <strong>📝 Văn bản trích xuất:</strong>
+        <div class="text-content">${formatOriginalTextHtml(original)}</div>
+      </div>
+      <div class="translated-text">
+        <strong>🇻🇳 Tiếng Việt:</strong>
+        <div class="text-content">${formatTranslationHtml(translation, original)}</div>
+      </div>
+      <div class="popup-actions">
+        <button class="action-btn copy-btn" title="Sao chép bản dịch">
+          <span class="btn-icon">📋</span>
+          <span class="btn-text">Sao chép</span>
+        </button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(popup);
+
+  // Center popup
+  popup.style.position = 'fixed';
+  popup.style.top = '50%';
+  popup.style.left = '50%';
+  popup.style.transform = 'translate(-50%, -50%)';
+  popup.style.maxHeight = '80vh';
+  popup.style.maxWidth = '600px';
+
+  // Make draggable
+  const header = popup.querySelector('.popup-header');
+  let isDragging = false;
+  let offsetX = 0, offsetY = 0;
+
+  header.addEventListener('mousedown', (e) => {
+    if (e.target.classList.contains('popup-close')) return;
+    isDragging = true;
+    const rect = popup.getBoundingClientRect();
+    offsetX = e.clientX - rect.left;
+    offsetY = e.clientY - rect.top;
+    popup.style.transform = 'none';
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    popup.style.left = (e.clientX - offsetX) + 'px';
+    popup.style.top = (e.clientY - offsetY) + 'px';
+  });
+
+  document.addEventListener('mouseup', () => {
+    isDragging = false;
+  });
+
+  // Close button
+  popup.querySelector('.popup-close').addEventListener('click', () => {
+    popup.classList.add('popup-closing');
+    setTimeout(() => popup.remove(), 200);
+  });
+
+  // Copy button
+  popup.querySelector('.copy-btn').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(translation);
+      const btn = popup.querySelector('.copy-btn');
+      btn.innerHTML = '<span class="btn-icon">✅</span><span class="btn-text">Đã sao chép!</span>';
+      setTimeout(() => {
+        btn.innerHTML = '<span class="btn-icon">📋</span><span class="btn-text">Sao chép</span>';
+      }, 2000);
+    } catch (err) {
+      showNotification('Không thể sao chép', 'error');
+    }
+  });
+
+  // Close on click outside
+  setTimeout(() => {
+    document.addEventListener('click', function closeHandler(e) {
+      if (!popup.contains(e.target)) {
+        popup.classList.add('popup-closing');
+        setTimeout(() => popup.remove(), 200);
+        document.removeEventListener('click', closeHandler);
+      }
+    });
+  }, 100);
 }

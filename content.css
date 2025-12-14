@@ -854,3 +854,115 @@
   cursor: not-allowed;
   transform: none;
 }
+
+/* ============================================================================
+   SCREENSHOT TRANSLATION MODE
+   ============================================================================ */
+
+/* Screenshot overlay */
+.gemini-screenshot-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 999999;
+  cursor: crosshair;
+}
+
+.screenshot-instructions {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 14px 24px;
+  border-radius: 12px;
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 15px;
+  font-weight: 600;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  animation: instructionSlideIn 0.3s ease-out;
+}
+
+@keyframes instructionSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-20px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+.screenshot-hint {
+  font-size: 12px;
+  opacity: 0.8;
+  font-weight: 400;
+}
+
+/* Selection box */
+.gemini-selection-box {
+  position: fixed;
+  border: 2px dashed #667eea;
+  background: rgba(102, 126, 234, 0.1);
+  z-index: 1000000;
+  pointer-events: none;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.4);
+}
+
+.gemini-selection-box::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border: 2px solid #667eea;
+  animation: selectionPulse 1s ease-in-out infinite;
+}
+
+@keyframes selectionPulse {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* Screenshot popup specific styles */
+.gemini-screenshot-popup {
+  max-width: 600px !important;
+}
+
+.gemini-screenshot-popup .screenshot-preview {
+  margin-bottom: 14px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 2px solid rgba(102, 126, 234, 0.3);
+  background: #f8f9fa;
+}
+
+.gemini-screenshot-popup .screenshot-preview img {
+  width: 100%;
+  max-height: 200px;
+  object-fit: contain;
+  display: block;
+}
+
+.gemini-screenshot-popup .popup-content {
+  max-height: 70vh;
+  overflow-y: auto;
+}
