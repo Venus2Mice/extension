@@ -868,7 +868,8 @@
   bottom: 0;
   background: rgba(0, 0, 0, 0.5);
   z-index: 999999;
-  cursor: crosshair;
+  /* Large high-contrast red crosshair cursor */
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 48 48'%3E%3Cline x1='24' y1='0' x2='24' y2='20' stroke='%23ff0000' stroke-width='3'/%3E%3Cline x1='24' y1='28' x2='24' y2='48' stroke='%23ff0000' stroke-width='3'/%3E%3Cline x1='0' y1='24' x2='20' y2='24' stroke='%23ff0000' stroke-width='3'/%3E%3Cline x1='28' y1='24' x2='48' y2='24' stroke='%23ff0000' stroke-width='3'/%3E%3Ccircle cx='24' cy='24' r='6' fill='none' stroke='%23ff0000' stroke-width='3'/%3E%3Cline x1='24' y1='0' x2='24' y2='20' stroke='%23ffffff' stroke-width='1'/%3E%3Cline x1='24' y1='28' x2='24' y2='48' stroke='%23ffffff' stroke-width='1'/%3E%3Cline x1='0' y1='24' x2='20' y2='24' stroke='%23ffffff' stroke-width='1'/%3E%3Cline x1='28' y1='24' x2='48' y2='24' stroke='%23ffffff' stroke-width='1'/%3E%3C/svg%3E") 24 24, crosshair;
 }
 
 .screenshot-instructions {

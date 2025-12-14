@@ -5,13 +5,7 @@ chrome.runtime.onInstalled.addListener(() => {
   // Create context menu
   chrome.contextMenus.create({
     id: 'translatePage',
-    title: 'Dịch trang (Lazy - Mặc định)',
-    contexts: ['page']
-  });
-
-  chrome.contextMenus.create({
-    id: 'translatePageFull',
-    title: 'Dịch toàn bộ trang (Full)',
+    title: '🌐 Dịch trang',
     contexts: ['page']
   });
 

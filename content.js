@@ -334,13 +334,13 @@ async function handleTranslatePage() {
     console.log('[Gemini Translator] Total characters:', totalChars);
 
     // Determine translation strategy
-    // CHANGED: Lower threshold to 3000 chars to make lazy mode default for most pages
-    const LAZY_MODE_THRESHOLD = 3000; // If more than 3000 chars, use lazy mode
+    // CHANGED: Removed lazy mode - use streaming for better UX
+    const STREAMING_THRESHOLD = 3000; // If more than 3000 chars, use streaming mode
 
-    if (totalChars > LAZY_MODE_THRESHOLD) {
-      console.log('[Gemini Translator] Large page detected, using lazy translation mode');
-      showNotification(`Trang lớn (${Math.round(totalChars / 1000)}KB text), dịch theo scroll...`, 'info');
-      await startLazyTranslation(textNodes, apiKey, actualModel);
+    if (totalChars > STREAMING_THRESHOLD) {
+      console.log('[Gemini Translator] Large page detected, using streaming translation mode');
+      showNotification(`Trang lớn (${Math.round(totalChars / 1000)}KB text), dùng streaming...`, 'info');
+      handleTranslatePageStreaming();
       return;
     }
 
