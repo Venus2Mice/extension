@@ -22,6 +22,7 @@ let streamingChunks = [];           // Array of chunk data { text, map, status }
 let streamingTextMap = [];          // Full text map for streaming mode
 let streamingCompletedCount = 0;    // Number of completed chunks
 let streamingTotalChunks = 0;       // Total chunks for progress tracking
+let isScreenshotMode = false;       // Screenshot mode state
 
 // Helper: Check if extension context is valid
 function isExtensionContextValid() {
@@ -2357,6 +2358,8 @@ function hideStickyNotification() {
 
 // Show loading indicator
 function showLoadingIndicator() {
+  if (isScreenshotMode) return;
+
   let indicator = document.getElementById('gemini-translator-loading');
   if (!indicator) {
     indicator = document.createElement('div');
@@ -3061,7 +3064,7 @@ function getStyleWithOverride(textMap, styleOverride) {
 // SCREENSHOT TRANSLATION MODE
 // ============================================================================
 
-let isScreenshotMode = false;
+// isScreenshotMode is defined at the top
 let screenshotOverlay = null;
 let selectionBox = null;
 let magnifier = null;
@@ -3077,7 +3080,7 @@ async function startScreenshotMode() {
   console.log('[Gemini Translator] Starting screenshot mode...');
 
   try {
-    showLoadingIndicator();
+    // showLoadingIndicator(); // Don't show loading here, it gets captured in screenshot!
 
     // Capture screenshot immediately for "frozen" effect
     const response = await chrome.runtime.sendMessage({ action: 'captureScreenshot' });
@@ -3156,7 +3159,8 @@ function handleScreenshotMouseDown(e) {
   const overlaysToHide = [
     '.gemini-translator-popup',
     '.gemini-translator-notification',
-    '.gemini-translator-sticky-notification'
+    '.gemini-translator-sticky-notification',
+    '#gemini-translator-loading'
   ];
 
   overlaysToHide.forEach(selector => {
