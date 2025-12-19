@@ -3064,40 +3064,71 @@ function getStyleWithOverride(textMap, styleOverride) {
 let isScreenshotMode = false;
 let screenshotOverlay = null;
 let selectionBox = null;
+let magnifier = null;
+let screenshotDataUrl = null;
 let startX = 0, startY = 0;
 
 /**
  * Start screenshot region selection mode
  */
-function startScreenshotMode() {
+async function startScreenshotMode() {
   if (isScreenshotMode) return;
 
   console.log('[Gemini Translator] Starting screenshot mode...');
-  isScreenshotMode = true;
 
-  // Create overlay
-  screenshotOverlay = document.createElement('div');
-  screenshotOverlay.id = 'gemini-screenshot-overlay';
-  screenshotOverlay.className = 'gemini-screenshot-overlay';
-  screenshotOverlay.innerHTML = `
-    <div class="screenshot-instructions">
-      <span>📷 Kéo để chọn vùng cần dịch</span>
-      <span class="screenshot-hint">Nhấn ESC để hủy</span>
-    </div>
-  `;
-  document.body.appendChild(screenshotOverlay);
+  try {
+    showLoadingIndicator();
 
-  // Create selection box
-  selectionBox = document.createElement('div');
-  selectionBox.className = 'gemini-selection-box';
-  selectionBox.style.display = 'none';
-  document.body.appendChild(selectionBox);
+    // Capture screenshot immediately for "frozen" effect
+    const response = await chrome.runtime.sendMessage({ action: 'captureScreenshot' });
 
-  // Event handlers
-  screenshotOverlay.addEventListener('mousedown', handleScreenshotMouseDown);
-  document.addEventListener('mousemove', handleScreenshotMouseMove);
-  document.addEventListener('mouseup', handleScreenshotMouseUp);
-  document.addEventListener('keydown', handleScreenshotKeyDown);
+    if (!response.success) {
+      throw new Error(response.error || 'Failed to capture screen');
+    }
+
+    screenshotDataUrl = response.dataUrl;
+    isScreenshotMode = true;
+
+    // Create overlay with captured image as background
+    screenshotOverlay = document.createElement('div');
+    screenshotOverlay.id = 'gemini-screenshot-overlay';
+    screenshotOverlay.className = 'gemini-screenshot-overlay';
+    screenshotOverlay.style.backgroundImage = `url(${screenshotDataUrl})`;
+    screenshotOverlay.innerHTML = `
+      <div class="screenshot-instructions">
+        <span>📷 Kéo để chọn vùng cần dịch</span>
+        <span class="screenshot-hint">Nhấn ESC để hủy</span>
+      </div>
+    `;
+    document.body.appendChild(screenshotOverlay);
+
+    // Create selection box
+    selectionBox = document.createElement('div');
+    selectionBox.className = 'gemini-selection-box';
+    selectionBox.style.display = 'none';
+    document.body.appendChild(selectionBox);
+
+    // Create magnifier
+    magnifier = document.createElement('div');
+    magnifier.className = 'gemini-magnifier';
+    magnifier.style.backgroundImage = `url(${screenshotDataUrl})`;
+    document.body.appendChild(magnifier);
+
+    // Event handlers
+    screenshotOverlay.addEventListener('mousedown', handleScreenshotMouseDown);
+    document.addEventListener('mousemove', handleScreenshotMouseMove);
+    document.addEventListener('mouseup', handleScreenshotMouseUp);
+    document.addEventListener('keydown', handleScreenshotKeyDown);
+
+    // Prevent scrolling
+    document.body.style.overflow = 'hidden';
+
+  } catch (error) {
+    console.error('[Gemini Translator] Start screenshot error:', error);
+    showNotification('Lỗi: ' + error.message, 'error');
+  } finally {
+    hideLoadingIndicator();
+  }
 }
 
 function handleScreenshotMouseDown(e) {
@@ -3111,53 +3142,106 @@ function handleScreenshotMouseDown(e) {
   selectionBox.style.width = '0';
   selectionBox.style.height = '0';
   selectionBox.style.display = 'block';
+
+  // Hide instructions during drag (requested by user)
+  if (screenshotOverlay) {
+    const instructions = screenshotOverlay.querySelector('.screenshot-instructions');
+    if (instructions) {
+      instructions.style.display = 'none';
+      // We don't need to show it again because mouseup ends the mode or cancels
+    }
+  }
+
+  // Also hide other extension overlays that might block the view
+  const overlaysToHide = [
+    '.gemini-translator-popup',
+    '.gemini-translator-notification',
+    '.gemini-translator-sticky-notification'
+  ];
+
+  overlaysToHide.forEach(selector => {
+    const elements = document.querySelectorAll(selector);
+    elements.forEach(el => el.style.display = 'none');
+  });
 }
 
 function handleScreenshotMouseMove(e) {
-  if (!isScreenshotMode || !selectionBox || selectionBox.style.display === 'none') return;
+  if (!isScreenshotMode) return;
 
   const currentX = e.clientX;
   const currentY = e.clientY;
 
-  const left = Math.min(startX, currentX);
-  const top = Math.min(startY, currentY);
-  const width = Math.abs(currentX - startX);
-  const height = Math.abs(currentY - startY);
+  // Update magnifier
+  if (magnifier) {
+    const ZOOM_LEVEL = 2.5;
+    const MAG_SIZE = 120; // Must match CSS
+    const HALF_SIZE = MAG_SIZE / 2;
 
-  selectionBox.style.left = left + 'px';
-  selectionBox.style.top = top + 'px';
-  selectionBox.style.width = width + 'px';
-  selectionBox.style.height = height + 'px';
+    // Position magnifier near cursor but not under it
+    magnifier.style.left = (currentX + 20) + 'px';
+    magnifier.style.top = (currentY + 20) + 'px';
+
+    // Calculate background position to show zoomed area
+    // If we want the center of magnifier to show the cursor position:
+    // BG Position X = - (CursorX * Zoom - HalfSize)
+    const bgX = - (currentX * ZOOM_LEVEL - HALF_SIZE);
+    const bgY = - (currentY * ZOOM_LEVEL - HALF_SIZE);
+
+    magnifier.style.backgroundPosition = `${bgX}px ${bgY}px`;
+    magnifier.style.backgroundSize = `${window.innerWidth * ZOOM_LEVEL}px ${window.innerHeight * ZOOM_LEVEL}px`;
+    magnifier.style.display = 'block';
+  }
+
+  // Update selection box if dragging
+  if (selectionBox && selectionBox.style.display !== 'none' && (e.buttons === 1)) {
+    const left = Math.min(startX, currentX);
+    const top = Math.min(startY, currentY);
+    const width = Math.abs(currentX - startX);
+    const height = Math.abs(currentY - startY);
+
+    selectionBox.style.left = left + 'px';
+    selectionBox.style.top = top + 'px';
+    selectionBox.style.width = width + 'px';
+    selectionBox.style.height = height + 'px';
+  }
 }
 
 async function handleScreenshotMouseUp(e) {
-  if (!isScreenshotMode || !selectionBox || selectionBox.style.display === 'none') return;
+  if (!isScreenshotMode || !selectionBox || selectionBox.style.display === 'none') {
+    // If just executed a click without drag, might be start of drag or error
+    return;
+  }
+
+  // If we are not dragging (width/height 0), ignore
+  const styleWidth = parseFloat(selectionBox.style.width || 0);
+  const styleHeight = parseFloat(selectionBox.style.height || 0);
+
+  if (styleWidth < 10 && styleHeight < 10) {
+    // Allow user to click without closing if they haven't dragged much
+    // usage pattern: mouse down -> drag -> mouse up
+    return;
+  }
 
   const rect = selectionBox.getBoundingClientRect();
 
-  // Minimum selection size
+  // Minimum selection size check
   if (rect.width < 20 || rect.height < 20) {
     endScreenshotMode();
     return;
   }
 
-  // Hide overlay before capture
+  // Hide UI before processing
   screenshotOverlay.style.display = 'none';
   selectionBox.style.display = 'none';
+  if (magnifier) magnifier.style.display = 'none';
 
   try {
     showLoadingIndicator();
-    showNotification('Đang chụp và dịch...', 'info');
+    showNotification('Đang dịch...', 'info');
 
-    // Capture screenshot
-    const response = await chrome.runtime.sendMessage({ action: 'captureScreenshot' });
-
-    if (!response.success) {
-      throw new Error(response.error || 'Không thể chụp màn hình');
-    }
-
-    // Crop to selection
-    const croppedImage = await cropImage(response.dataUrl, rect);
+    // Use the ALREADY CAPTURED image to crop
+    // This avoids taking a second screenshot
+    const croppedImage = await cropImage(screenshotDataUrl, rect);
 
     // Get API key and translate
     const { apiKey } = await chrome.runtime.sendMessage({ action: 'getApiKey' });
@@ -3197,6 +3281,7 @@ function handleScreenshotKeyDown(e) {
 
 function endScreenshotMode() {
   isScreenshotMode = false;
+  screenshotDataUrl = null;
 
   if (screenshotOverlay) {
     screenshotOverlay.remove();
@@ -3207,6 +3292,14 @@ function endScreenshotMode() {
     selectionBox.remove();
     selectionBox = null;
   }
+
+  if (magnifier) {
+    magnifier.remove();
+    magnifier = null;
+  }
+
+  // Restore scrolling
+  document.body.style.overflow = '';
 
   document.removeEventListener('mousemove', handleScreenshotMouseMove);
   document.removeEventListener('mouseup', handleScreenshotMouseUp);
