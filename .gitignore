@@ -36,3 +36,6 @@ yarn-error.log*
 # Temporary files
 tmp/
 temp/
+
+# User specific
+.agent/rules/vi.md
