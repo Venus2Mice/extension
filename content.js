@@ -1687,7 +1687,7 @@ function showTranslationPopup(original, translation, selectionRect) {
           popup.classList.add('popup-closing');
           setTimeout(() => popup.remove(), 200);
         }
-      }, 60000); // 60 seconds instead of 30
+      }, 300000); // 5 minutes instead of 2
     } else {
       // Toggle visibility
       if (explanationSection.style.display === 'none') {
@@ -1757,13 +1757,13 @@ function showTranslationPopup(original, translation, selectionRect) {
     document.addEventListener('click', closeOnClickOutside);
   }, 100);
 
-  // Auto close after 30 seconds (initial timeout)
+  // Auto close after 2 minutes (initial timeout)
   autoCloseTimer = setTimeout(() => {
     if (popup.parentElement) {
       popup.classList.add('popup-closing');
       setTimeout(() => popup.remove(), 200);
     }
-  }, 15000);
+  }, 120000);
 }
 
 // Calculate optimal popup position
