@@ -6,11 +6,145 @@
 }
 
 body {
-  width: 320px;
+  width: 600px;
+  /* Wide horizontal layout */
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   background: #fff;
   color: #202124;
   font-size: 14px;
+}
+
+/* ... existing styles ... */
+
+/* Main Actions - Horizontal Row */
+.main-actions {
+  padding: 16px;
+  display: flex;
+  flex-direction: row;
+  /* Horizontal */
+  gap: 12px;
+}
+
+.btn-main {
+  flex: 1;
+  /* Equal width */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 16px;
+  /* ... rest same ... */
+  border: none;
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s, box-shadow 0.2s;
+  background: #1a73e8;
+  color: #fff;
+}
+
+/* ... existing styles ... */
+
+/* Advanced Panel - Grid Layout */
+.advanced-panel {
+  padding: 16px;
+  background: #f8f9fa;
+  border-bottom: 1px solid #e0e0e0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  /* 2 Columns */
+  gap: 16px;
+}
+
+.setting-group {
+  margin-bottom: 0;
+  /* Remove margin in grid */
+}
+
+/* Make Test Connection full width */
+.btn-test {
+  grid-column: 1 / -1;
+  width: 100%;
+  margin-top: 0;
+  padding: 10px;
+  background: #fff;
+  border: 1px solid #dadce0;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #5f6368;
+  cursor: pointer;
+}
+
+/* ... footer ... */
+
+/* Translation Box - Side by Side */
+.translate-section {
+  padding: 16px;
+  border-bottom: 1px solid #e0e0e0;
+  /* Thinner border */
+}
+
+.translate-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.input-text {
+  flex: 1;
+  height: 60px;
+  /* Shorter height */
+  padding: 10px;
+  border: 1px solid #dadce0;
+  border-radius: 4px;
+  /* Sharper corners */
+  resize: none;
+  font-family: inherit;
+  font-size: 14px;
+  outline: none;
+  transition: all 0.2s;
+}
+
+.input-text:focus {
+  border-color: #1a73e8;
+  box-shadow: 0 0 0 1px #1a73e8;
+}
+
+.btn-translate {
+  background: #1a73e8;
+  color: #fff;
+  border: none;
+  height: 60px;
+  /* Match input height */
+  padding: 0 24px;
+  border-radius: 4px;
+  font-weight: bold;
+  cursor: pointer;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.btn-translate:hover {
+  background: #1557b0;
+  box-shadow: 0 1px 2px rgba(60, 64, 67, 0.3);
+}
+
+.btn-translate:disabled {
+  background: #dadce0;
+  cursor: default;
+  box-shadow: none;
+}
+
+.output-text {
+  margin-top: 12px;
+  padding: 12px;
+  background: #f1f3f4;
+  border-radius: 4px;
+  color: #202124;
+  font-size: 16px;
+  line-height: 1.5;
+  white-space: pre-wrap;
 }
 
 .container {

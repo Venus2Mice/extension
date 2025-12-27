@@ -50,6 +50,22 @@ document.addEventListener('DOMContentLoaded', () => {
       saveApiKey();
     }
   });
+
+  // Direct Text Translation
+  const translateBtn = document.getElementById('translateTextBtn');
+  if (translateBtn) {
+    translateBtn.addEventListener('click', handleTextTranslation);
+  }
+
+  const inputBox = document.getElementById('inputText');
+  if (inputBox) {
+    inputBox.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        handleTextTranslation();
+      }
+    });
+  }
 });
 
 // Toggle advanced settings panel
@@ -303,5 +319,60 @@ async function clearDomainCache() {
     }
   } catch (error) {
     showStatus('Lỗi: ' + error.message, 'error');
+  }
+}
+
+// Handle direct text translation
+async function handleTextTranslation() {
+  const input = document.getElementById('inputText');
+  const output = document.getElementById('outputText');
+  const btn = document.getElementById('translateTextBtn');
+  const text = input.value.trim();
+
+  if (!text) return;
+
+  // UI Loading State
+  btn.disabled = true;
+  const originalBtnText = btn.textContent;
+  btn.textContent = 'Đang dịch...';
+  output.style.display = 'none';
+  output.textContent = '';
+
+  try {
+    const storage = await chrome.storage.sync.get(['geminiApiKey', 'styleOverride']);
+    if (!storage.geminiApiKey) {
+      showStatus('Vui lòng nhập API Key bên dưới', 'error');
+      return;
+    }
+
+    // Prepare text with [N] indexing to match background.js expectations
+    const lines = text.split('\n');
+    const indexedText = lines.map((line, i) => `[${i}]${line}`).join('\n');
+
+    const response = await chrome.runtime.sendMessage({
+      action: 'translate',
+      text: indexedText,
+      apiKey: storage.geminiApiKey,
+      textStyle: { type: storage.styleOverride || 'general' },
+      currentUrl: 'user-input'
+    });
+
+    if (response.success && response.translation) {
+      // Clean up the [N] prefixes from response
+      const cleanText = response.translation
+        .replace(/^\[\d+\]/gm, '') // Remove start-of-line [N]
+        .replace(/^\s+/gm, '')     // Remove leading space after [N] removal
+        .trim();
+
+      output.textContent = cleanText;
+      output.style.display = 'block';
+    } else {
+      showStatus(response.error || 'Lỗi không xác định', 'error');
+    }
+  } catch (error) {
+    showStatus('Lỗi: ' + error.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalBtnText;
   }
 }
